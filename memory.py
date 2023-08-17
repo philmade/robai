@@ -1,4 +1,4 @@
-from .robot_in import ChatMessage, AIMessage
+from .in_out import ChatMessage, AIMessage
 from typing import List, Union, Any, Type, TypeVar
 from pydantic import BaseModel
 
@@ -8,45 +8,35 @@ TypeOutputModel = TypeVar("TypeOutputModel")
 
 # Define the BaseMemory class
 class BaseMemory(BaseModel):
+    # Purpose is a string that describes the purpose of the robot. It's a system prompt.
     purpose: str
-    input_model: Type[Any] = None
-    output_model: Type[Any] = None
+    # The input model is what goes into your robot
+    input_model: Type[Any] = ChatMessage
+    # The instructions for the AI is what will be sent to the AI. Build this in pre-call chain.
     instructions_for_ai: Union[
         str, List[str], List[dict], List[bool], List[int], List[float], List[list]
     ] = None
+    # List of messages that have been sent / received by the AI
     message_history: List[Union[ChatMessage, AIMessage]] = []
-    max_message_history_length: int = 1000
+    # When the memory.complete is true when the robot has finished its job
     complete: bool = False
-    prompt_as_string: str = None
-    prompt_as_message: ChatMessage = None
+
+    # The AI response will always be available as a ChatMessage object after the AI has been called
+    ai_response: ChatMessage = None
+
+    # Other things that will be available:
+    ai_raw_response: Any = None
+    ai_string_response: str = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Initialize the message_history with the purpose message
-        self.prompt_as_message = ChatMessage(role="system", content=self.purpose)
-        self.add_message(self.prompt_as_message)
-        self.prompt_as_string = self.purpose
-
-    def count_tokens(self, text: str) -> int:
-        """
-        Count the number of tokens in a string.
-        """
-        token_length = text.split().__len__() / 1.5
-        return token_length
-
-    def total_tokens_in_history(self) -> int:
-        """Count the total number of tokens in the message_history."""
-        return sum(
-            self.count_tokens(message.content) for message in self.message_history
-        )
+        self.add_message(ChatMessage(role="system", content=f"{self.purpose}"))
 
     def add_message(self, message: Union[ChatMessage, AIMessage]):
-        """Add a new message to the message_history and truncate based on tokens if necessary."""
-        # while (
-        #     self.total_tokens_in_history() + self.count_tokens(message.content)
-        #     > self.max_message_history_length
-        # ):
-        #     self.message_history.pop(0)  # Remove the oldest message
+        """
+        Add a new message to the message_history and truncate based on tokens if necessary.
+        """
         self.message_history.append(message)
 
     def set_complete(self):

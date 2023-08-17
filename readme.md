@@ -4,7 +4,95 @@
 ---
 
 ## Introduction
-RobAI is a powerful framework designed to streamline the construction and utilization of AI robots. By following the steps outlined below, developers can easily integrate AI functionalities into their applications and services.
+RobAI is a _simple_ but powerful framework designed to make working with AI models more intuitive. It is 'memory' oriented, with a simple flow of [call all the pre-call functions >> call the AI model >> call all the post-call functions]. The object passed to each function in that chain is always the memory.
+
+That's it.
+
+Memory is just a pydantic class where you can store anything the robot might need to 'do' whatever it needs to. Robot's need a purpose - you can imagine this as the 'system' prompt, it's what the robot is told it's purpose will be when it's initialised. Have a look at the init method - the robot's pupose is added as an initial 'system' message to it's message history. But don't worry too much about it.
+
+### Installation
+Installation Instructions:
+1. Using pip:
+For users who prefer pip, they can install your package directly from GitHub (once you push your changes) with:
+
+```
+pip install git+https://github.com/philmade/robai.git
+```
+
+
+2. Using poetry:
+
+```
+git clone https://github.com/philmade/robai.git
+cd robai
+poetry install
+```
+
+Usage:
+```python
+from robai.base import AIRobot
+
+ai_robot = AIRobot()
+```
+
+```python
+class BaseMemory(BaseModel):
+    purpose: str
+    input_model: Type[Any] = None
+    output_model: Type[Any] = None
+    instructions_for_ai: Union[
+        str, List[str], List[dict], List[bool], List[int], List[float], List[list]
+    ] = None
+    message_history: List[Union[ChatMessage, AIMessage]] = []
+    max_message_history_length: int = 1000
+    complete: bool = False
+    prompt_as_string: str = None
+    prompt_as_message: ChatMessage = None
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Initialize the message_history with the purpose message
+        self.prompt_as_message = ChatMessage(role="system", content=self.purpose)
+        self.add_message(self.prompt_as_message)
+        self.prompt_as_string = self.purpose
+```
+Don't overthink the memory, just know that you can add whatever you like to it, and it's very helpful. You must only set a purpose. The rest of that memory we'll come to later. 
+
+Ok, so we have looked at our robot's memory - now what?
+
+There's the pre-call chain, which is just a list of functions that are called _before_ the AI model is actually called. You can write whatever you want in these functions, as long as each function takes a single argument - the memory object - and each function returns a single object - the memory object. 
+
+It's memory oriented... see?
+
+The only thing that you must ensure is that the final function in your pre-call chain sets the 'instructions_for_ai' on the memory object. Have a look at it up there in the memory object. Everything before that, you can do _whatever you want_ as long as those instructions are set somehow. Without instructions, the ai_model doesn't have anything to do!
+
+So now we have our AI instructions - easy. Now what?
+
+Now the memory object is passed to the ai_model, and we call() it, and what argument do we use in the call()? The memory object! 
+
+The call() method takes the memory object, and passes the memory.instructions_for_ai as the prompt to the language model. As such, memory.instructions_for_ai should be json serializable. The AI Model then returns.... the memory object! Exactly _how_ the ai_model returns its response is up to you, because you can implement the ai_model however you like. Here's an intuitive way to return the repsponse for 'chat completions' via OpenAI:
+
+```python
+class FakeAICompletion(BaseAIModel):
+    is_ready: bool = False
+
+    def setup(self, *args, **kwargs):
+        self.is_ready = True
+
+    def call(self, memory: BaseMemory) -> BaseMemory:
+        if not self.is_ready:
+            raise Exception("Model is not ready - YOU MUST CALL SETUP")
+        # For the purposes of this FakeAICompletion, we use Faker, but in a real LLM you'd call language model 
+        fake_response = call_any_ai_somehow(prompt=memory.instructions_for_ai)
+        # Here fake sentences would be the string response from the AI.
+        message = ChatMessage(role="assistant", content=fake_response)
+        # We call a memory function and now the AI's response is stored, in memory, as a ChatMessage. Done.
+        memory.add_message(message)
+        # And now we return the memory object!
+        return memory
+```
+
+Now,
 
 ## 1. Define a Custom Memory
 
