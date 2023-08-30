@@ -4,28 +4,34 @@
 ---
 
 ## Introduction
-RobAI is a _simple_ but powerful framework designed to make working with AI models more intuitive. It is 'memory' oriented, with a simple flow of `[call all the pre-call functions]` >> `call the AI model` >> `[call all the post-call functions]`. The object passed to each function in that chain is always the memory.
+RobAI is a _simple_ but powerful framework designed to make working with AI models more intuitive. It is 'memory' oriented, with a simple flow: it calls all the pre-call functions, it then calls the AI model, then it calls all the post-call functions. 
 
-That's it.
+The common object at every step of the journey is the `memory` object, of type `BaseMemory`. The memory is always available on the robot at `robot.memory`
 
-Memory is just a pydantic class where you can store anything the robot might need to 'do' whatever it needs to. Robot's need a purpose - you can imagine this as the 'system' prompt, it's what the robot is told it's purpose will be when it's initialised. Have a look at the init method - the robot's pupose is added as an initial 'system' message to it's message history. But don't worry too much about it.
+That's it. When the robot is finished, it returns its memory object.
 
-The framework has been written to help the code surrounding large `language` models feel closer to writing prose. Something that's intuitive and rooted in something that feels like a 'real' interaction.
+Memory is just a pydantic class where you can store anything the robot might need to 'do' whatever it's tasked with. Robot's need a `purpose`, and as you might have guessed, the purpose of the robot is stored in the robot's memory at `robot.memory.purpose`.
+
+You might imagine this as the robot's 'system prompt', it's what the robot is told it's purpose will be when it's initialised. Have a look at the 'AIRobot' init method and you'll see that the robot's pupose is added as an initial 'system' message to it's message history. 
+
+The framework has been written so that writing code for large *language* models feel closer to writing *language*. Writing AI code should feel intuitive, it should be rooted in concepts familiar to humans, and the code should read like a 'real' interaction. For things to feel familiar, we have to know exactly what happens when we call process on our robot at `robot.process(some_input_string_or_model)`
 
 ## What exactly happens when you call the robot?
 
 When you've finished making your robot, you'll call .process() on the robot and this is _exactly_ what will happen.
 1. Developer calls `robot.process(input)`
-2. `input` is added to the robot's `memory` object
-3. `memory` is passed from function to function in `pre_call_chain`
-4. `memory` is then sent to `ai_model` which parses the `memory.instructions_for_ai` attribute, which is always in the format of `ChatMessage(role='foo' content='this is basically the prompt)` 
+2. `input` is added to the robot's `memory` object at `memory.input_model`
+3. `memory` is passed from function to function in the `pre_call_chain`
+4. `memory` is then sent to `ai_model` which parses the `memory.instructions_for_ai` attribute, which is always a list of `ChatMessage(role='foo' content='this is basically the prompt)` objects. 
 5. `robot.ai_model` then sends those parsed instructions to the AI model, and puts the response in `memory.ai_response`
 6. Robot passes the `memory` object (with a new `ai_response`) to every function in `post_call_chain`
 6. Robot returns the `memory` object
-    - If `memory.set_complete()` is called somewhere in the chain, the `memory` object is returned
-    - If `memory` is NOT complete, the `memory` is passed from `post_call_chain` to `pre_call_chain` again and it keeps going until its done
+    - If `memory.set_complete()` is called somewhere in the chain (usually post-call), the `memory` object is returned
+    - If `memory` is NOT complete, the `memory` is passed from `post_call_chain` to `pre_call_chain` again and it keeps going until something triggers `memory.set_complete()` in the chain.
 
-As simple as this is, it's actually a very powerful setup. Robots can easily be chained together in the pre-call and post-call chains, and because you always know that the instructions_for_ai should be in the format of a ChatMessage() object, it makes these interactions much easier. When developing with Robai, you only need to use the precall functions to create `memory.instructions_for_ai` will be when it's sent to the AI model at step 4. In the `post call` functions, you can chain the robot to another robot, or process the response further, or even send the robot back to `pre-call` if the AI response is not as expected. As soon as your robot passes some test, which you set in post-call, just call memory.set_complete() and the robot will return the entire memory object.
+As simple as this is, it's actually a very powerful and flexible setup. Robots can easily be chained together in the pre-call and post-call chains because you can rely on the fact that `memory.instructions_for_ai` will *always* be `List[ChatMessage]`. Whatever you're doing with a large language model, you can certainly 'do it' via the medium of ChatMessage objects. Standardising this drastically reduces complexity.
+
+When developing with Robai, you only need to use the `pre-call` functions to create the `memory.instructions_for_ai` for the AI model at step 4. In the `post-call` functions, you can chain the robot to another robot, process the response further, or even send the robot back to `pre-call` if the AI response is not as expected. As soon as your robot passes some test, which you set in post-call, just call `memory.set_complete()` and the robot will return the entire memory object. Other than that, you can really do whatever you like in pre-call or post-call chains.
 
 # A complete example
 ## Summarising text longer than the context window allows
@@ -182,25 +188,10 @@ ai_robot = AIRobot()
 ```
 
 ```python
-class BaseMemory(BaseModel):
-    purpose: str
-    input_model: Type[Any] = None
-    output_model: Type[Any] = None
-    instructions_for_ai: Union[
-        str, List[str], List[dict], List[bool], List[int], List[float], List[list]
-    ] = None
-    message_history: List[Union[ChatMessage, AIMessage]] = []
-    max_message_history_length: int = 1000
-    complete: bool = False
-    prompt_as_string: str = None
-    prompt_as_message: ChatMessage = None
+class SimpleChatMemory(BaseMemory):
+    purpose: str = "Chat with a human"
+    input_model: ChatMessage = None
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Initialize the message_history with the purpose message
-        self.prompt_as_message = ChatMessage(role="system", content=self.purpose)
-        self.add_message(self.prompt_as_message)
-        self.prompt_as_string = self.purpose
 ```
 Don't overthink the memory, just know that you can add whatever you like to it, and it's very helpful. You must only set a purpose. The rest of that memory we'll come to later. 
 
