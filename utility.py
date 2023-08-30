@@ -175,25 +175,6 @@ class MessagePrinter:
     def reset_color(self):
         return "\033[0m"
 
-    def pprint_message(self, robot: "AIRobot", message: ChatMessage) -> None:
-        """
-        Prints the message in a visually appealing format with alternating colors.
-        Also, provides a clean copyable version of the content.
-        """
-        if not message or not message.content:
-            return
-
-        robot_name = robot.__class__.__name__
-        formatted_message = Panel.fit(
-            message.content,
-            title=robot_name,
-            width=78,
-            style=robot.color,
-            border_style="white",
-        )
-
-        self.console.print(message.content, style=robot.color)
-
     def pprint_color(self, obj: Any, style_name: str = "github-dark") -> None:
         """Pretty-print in color."""
         from pygments import styles
