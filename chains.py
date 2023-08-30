@@ -1,5 +1,5 @@
-from .languagemodels import BaseMemory
-from .in_out import ChatMessage, AIMessage
+from robai.languagemodels import BaseMemory
+from robai.in_out import ChatMessage, AIMessage
 
 
 # =========================================
@@ -16,6 +16,9 @@ def create_instructions(memory: BaseMemory) -> BaseMemory:
 
     # Return the memory
     return memory
+
+
+simply_create_instructions = [create_instructions]
 
 
 # =========================================
