@@ -1,104 +1,112 @@
 from robai.base import AIRobot
 from robai.in_out import ChatMessage
-from typing import List, Callable, Self
+from typing import List, Callable
 from robai.languagemodels import OpenAIChatCompletion
 from robai.examples.memory import SummaryRobotMemory
-from robai.utility import pprint_color
-
-
-# UTILITY
-def split_text_into_token_chunks(text: str, chunk_length_limit: int) -> List[str]:
-    """
-    Split the text into chunks based on an estimated token count.
-    """
-    average_tokens_per_word = 1.5
-    words = text.split()
-    words_per_chunk = int(chunk_length_limit / average_tokens_per_word)
-
-    chunks = []
-    for i in range(0, len(words), words_per_chunk):
-        chunks.append(" ".join(words[i : i + words_per_chunk]))
-
-    return chunks
-
-
-# PRE-CALL CHAIN
-def split_text_into_chunks(
-    memory: SummaryRobotMemory,
-) -> SummaryRobotMemory:
-    to_summarise = memory.input_model
-    chunk_length_limit = memory.chunk_length_limit
-    if not memory.chunks:
-        chunks = split_text_into_token_chunks(to_summarise, chunk_length_limit)
-        memory.chunks = chunks
-        memory.current_chunk_index = 0
-        memory.total_chunks = len(chunks)
-    return memory
-
-
-def provide_context_for_chunk(
-    memory: SummaryRobotMemory,
-) -> SummaryRobotMemory:
-    to_summarize = memory.chunks.pop(0)  # Pop the first chunk as the current content
-    current_chunk_num = memory.current_chunk_index + 1
-    context = f"""
-    Task: {memory.purpose} You performing your task. You are at section {current_chunk_num} of {memory.total_chunks}. \n\n
-    Here's what you've summarised so far {memory.summaries}\n\n
-    You must now summarise this chunk of text and we'll add it to the summary so far: {to_summarize}\n\n
-    """
-    memory.instructions_for_ai = [ChatMessage(role="user", content=context)]
-    return memory
-
-
-# POST-CALL CHAIN
-def append_summary_and_check_complete(
-    memory: SummaryRobotMemory,
-) -> SummaryRobotMemory:
-    if not hasattr(memory, "summaries"):
-        memory.summaries = []
-    # APPEND THE SUMMARY WE HAVE RECEIVED TO THE LIST OF SUMMARIES
-    memory.summaries.append(memory.ai_response.content)
-    memory.current_chunk_index += 1
-    # CHECK IF WE ARE DONE
-    if memory.current_chunk_index == memory.total_chunks:
-        # There are no more chunks to summarise,
-        # we are done. memory.set_complete() means the robot will not go back to pre-call.
-        memory.set_complete()
-    else:
-        # There are more chunks to summarise. We are not done.
-        # The robot sends everything back to pre-call and
-        # we'll summarise the next chunk.
-        # Note that in pre-call we pop() the chunks, so when they're processed they are gone.
-        pass
-
-    return memory
-
-
-# ASSEMBLE THE CHAINS
-summary_pre_call_chain = [split_text_into_chunks, provide_context_for_chunk]
-
-summary_post_call_chain = [append_summary_and_check_complete]
+import re
 
 
 class SummaryRobot(AIRobot):
-    def __init__(
-        self,
-        ai_model: OpenAIChatCompletion = OpenAIChatCompletion(),
-        memory: SummaryRobotMemory = SummaryRobotMemory(
-            purpose="""Please judge this statement as one of two words: True/False. Then justify why"""
-        ),
-        pre_call_chain: List[Callable] = summary_pre_call_chain,
-        post_call_chain: List[Callable] = summary_post_call_chain,
-        **kwargs,
-    ) -> Self:
-        self.memory = memory
-        self.ai_model = ai_model
-        self.pre_call_chain = pre_call_chain
-        self.post_call_chain = post_call_chain
+    def __init__(self):
+        super().__init__()
+        self.ai_model: OpenAIChatCompletion = OpenAIChatCompletion()
+        self.memory: SummaryRobotMemory = SummaryRobotMemory(
+            purpose="""
+                    Please extract all key facts of this text into a format similar to shorthand
+                    but readable for AI. It must be as dense as possible, aim to include every
+                    relevant interesting fact and insight. Use abbreviations, symbols, and
+                    condense data where possible. For example, from the text 'In 2020, the US
+                    had 510,000 COVID deaths and 9.3 million active cases. Europe added
+                    new restrictions due to the pandemic.', a suitable compression might be
+                    '2020: US=510K deaths, 9.3M act cases. EU: +restrict.
+                    """.strip(
+                "\n"
+            ),
+        )
+        self.pre_call_chain: List[Callable] = [
+            self.split_text_into_chunks,
+            self.provide_context_for_chunk,
+        ]
+        self.post_call_chain: List[Callable] = [
+            self.append_summary_and_check_complete,
+        ]
 
+    # PRE-CALL CHAIN 1
+    def split_text_into_chunks(
+        self,
+        memory: SummaryRobotMemory,
+    ) -> SummaryRobotMemory:
+        to_summarise = memory.input_model
+        chunk_length_limit = memory.chunk_length_limit
+        if not memory.chunks:
+            chunks = self.split_text_into_token_chunks(to_summarise, chunk_length_limit)
+            memory.chunks = chunks
+            memory.current_chunk_index = 0
+            memory.total_chunks = len(chunks)
+        return memory
+
+    # PRE-CALL CHAIN 2
+    def provide_context_for_chunk(
+        self,
+        memory: SummaryRobotMemory,
+    ) -> SummaryRobotMemory:
+        to_summarize = memory.chunks.pop(
+            0
+        )  # Pop the first chunk as the current content
+        current_chunk_num = memory.current_chunk_index + 1
+        context = f"""
+        You are summarising text. You are at section {current_chunk_num} of {memory.total_chunks}. \n\n
+        Here's what you've summarised so far {memory.summaries}\n\n
+        You must now summarise this chunk of text and we'll add it to the summary so far: {to_summarize}\n\n
+        """
+        memory.instructions_for_ai = [ChatMessage(role="user", content=context)]
+        return memory
+
+    # POST-CALL CHAIN 1
+    def append_summary_and_check_complete(
+        self,
+        memory: SummaryRobotMemory,
+    ) -> SummaryRobotMemory:
+        if not hasattr(memory, "summaries"):
+            memory.summaries = []
+        # APPEND THE SUMMARY WE HAVE RECEIVED TO THE LIST OF SUMMARIES
+        memory.summaries.append(memory.ai_response.content)
+        memory.current_chunk_index += 1
+        # CHECK IF WE ARE DONE
+        if memory.current_chunk_index == memory.total_chunks:
+            # There are no more chunks to summarise,
+            # we are done. memory.set_complete() means the robot will not go back to pre-call.
+            memory.set_complete()
+        else:
+            # There are more chunks to summarise. We are not done.
+            # The robot sends everything back to pre-call and
+            # we'll summarise the next chunk.
+            # Note that in pre-call we pop() the chunks, so when they're processed they are gone.
+            pass
+
+        return memory
+
+    # UTILITY
+    def split_text_into_token_chunks(
+        self, text: str, chunk_length_limit: int
+    ) -> List[str]:
+        """
+        Split the text into chunks based on an estimated token count.
+        """
+        average_tokens_per_word = 1.5
+        words = text.split()
+        words_per_chunk = int(chunk_length_limit / average_tokens_per_word)
+
+        chunks = []
+        for i in range(0, len(words), words_per_chunk):
+            chunks.append(" ".join(words[i : i + words_per_chunk]))
+
+        return chunks
+
+
+robot = SummaryRobot()
 
 if __name__ == "__main__":
-    robot = SummaryRobot()
     text_to_summarise = """Opening Statement
             Mr. Chairman, Ranking Members, and Congressmen,
             Thank you, I am happy to be here. This is an important issue, and I am grateful for your time.
@@ -159,12 +167,14 @@ if __name__ == "__main__":
             one where collective curiosity is ignited, and global cooperation becomes the norm, rather than the
             exception.
             Thank You ."""
-    pprint_color("ROBOT IS SUMMARISING TEXT")
-    pprint_color(text_to_summarise)
+    text_to_summarise = re.sub(r"\s+", " ", text_to_summarise)
+    robot.console.rule("TO SUMMARISE SUMMARISING TEXT")
+    robot.console.print(
+        text_to_summarise,
+        justify="left",
+        overflow="fold",
+        style=robot.color,
+    )
     input_model: str = text_to_summarise
-    pprint_color("PROCESSING...")
     memory = robot.process(input_model)
-    pprint_color("DONE")
-    pprint_color("SUMMARY:")
-    pprint_color("=========")
-    pprint_color(memory.ai_response.content)
+    robot.console.print(memory.ai_response)

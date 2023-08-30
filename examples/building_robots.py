@@ -17,7 +17,6 @@ class PoetryRobot(AIRobot):
     # ==========
     ai_model: OpenAIChatCompletion  # <--- This is a subclass of BaseAIModel.  # You can make your own very easily or get one from robai.languagemodels
     memory: SimpleChatMemory  # <--- Start with SimpleChatMemory, # You can change this later
-    input_model: ChatMessage  # <--- This is the input model for your robot. It's a ChatMessage by default, but you can change it to anything you like
     purpose: str = "I think you're a robot that writes poems from the user's input."
     pre_call_chain: List[Callable]  # <--- a list of functions
     post_call_chain: List[Callable]  # <--- a list of functions
@@ -51,7 +50,7 @@ class PoetryRobot(AIRobot):
     # 4.1 SIMPLE LOGS BEFORE THE ROBOT CALLS THE AI [OPTIONAL]
     # =========================================
     def create_log(self, memory: SimpleChatMemory) -> SimpleChatMemory:
-        self.printer.pprint_color(
+        self.print_incomin().pprint_color(
             f"Robot {self.__class__.__name__} has just received some input, which is: {memory.input_model}".strip()
         )
         return memory
@@ -210,8 +209,9 @@ class PoetryRobot(AIRobot):
             memory.input_model,
         ]
         self.ai_model.max_tokens = 30
-        self.printer.pprint_color(
-            f"{self.__class__.__name__} is about to call self.ai_model {self.ai_model} with instructions: {memory.instructions_for_ai}".strip()
+        self.console.rule(f"{self.__class__.__name__} is calling self.ai_model")
+        self.console.print(
+            f"I'm calling self.ai_model which is {self.ai_model}, my memory.instructions_for_ai is {memory.instructions_for_ai}"
         )
         return memory
 
@@ -220,7 +220,7 @@ class PoetryRobot(AIRobot):
     # =========================================
 
     def print_what_I_did(self, memory: SimpleChatMemory) -> SimpleChatMemory:
-        self.printer.pprint_message(robot=self, message=memory.ai_response)
+        self.pprint_message(message=memory.ai_response)
         return memory
 
     def stop_the_robot(self, memory: SimpleChatMemory) -> SimpleChatMemory:

@@ -70,7 +70,7 @@ class QueryAmplifierRobot(AIRobot):
         # We'll add that to out custom memory
         memory.amplified_query = memory.ai_response.content
         memory.set_complete()  # <--- Very important or we'll loop!
-        self.printer.pprint_message(robot=self, message=memory.ai_response)
+        self.pprint_message(message=memory.ai_response)
         return memory
 
     def __init__(self):
@@ -164,6 +164,4 @@ if __name__ == "__main__":
     )
     memory_with_library_recommendations = library_guy_robot.process(test_library_query)
 
-    library_guy_robot.printer.pprint_message(
-        robot=library_guy_robot, message=library_guy_robot.memory.ai_response
-    )
+    library_guy_robot.pprint_message(message=library_guy_robot.memory.ai_response)

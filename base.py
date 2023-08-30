@@ -39,7 +39,7 @@ class AIRobot(ABC):
                 message="Memory must have a purpose to be used by a robot"
             )
         self.ai_model: BaseAIModel = ai_model
-        self.printer = MessagePrinter()
+        # self.printer = MessagePrinter()
         self.theme = Theme(
             {
                 "red": "red",
@@ -63,7 +63,7 @@ class AIRobot(ABC):
         self.logging_enabled = logging_enabled
         self.console = Console(theme=self.theme, width=100)
         if self.logging_enabled:
-            self.console.rule("[cyan]Initializing Robot")
+            self.console.rule(f"[cyan]Initializing {self.__class__.__name__}")
             self.console.print(f"Initialized robot: {self.__class__.__name__}")
             self.console.print(f"Robot's Purpose: {self.memory.purpose}")
             self.console.print(f"Robot's Memory: {self.memory}")
@@ -298,10 +298,8 @@ class AIRobot(ABC):
                 )
                 self.memory.add_message_to_history(robot_call_first_message)
                 self.memory.add_message_to_history(self.memory.robot_response)
-                self.printer.pprint_message(
-                    robot=self, message=robot_call_first_message
-                )
-                self.printer.pprint_message(
+                self.pprint_message(robot=self, message=robot_call_first_message)
+                self.pprint_message(
                     robot=robot_I_want_to_call, message=self.memory.robot_response
                 )
 
@@ -311,7 +309,7 @@ class AIRobot(ABC):
                 # STEP ONE - DID THE ROBOT I CALLED HANG UP?
                 if self.memory.robot_response:
                     if self.check_end_call(self.memory.robot_response.content):
-                        self.printer.pprint_message(
+                        self.pprint_message(
                             robot=self, message=self.memory.robot_response
                         )
                         self.memory.in_robo_call = False
@@ -335,11 +333,11 @@ class AIRobot(ABC):
                     )
                 self.memory.add_message_to_history(my_reply)
                 self.memory.add_message_to_history(self.memory.robot_response)
-                self.printer.pprint_message(robot=self, message=my_reply)
+                self.pprint_message(robot=self, message=my_reply)
                 self.memory.robot_response = robot_I_want_to_call.robo_recieve(
                     robot_who_is_calling=self, message=my_reply
                 )
-                self.printer.pprint_message(
+                self.pprint_message(
                     robot=robot_I_want_to_call,
                     message=self.memory.robot_response,
                 )
@@ -374,3 +372,18 @@ class AIRobot(ABC):
                 )
             self.memory.add_message_to_history(message_to_send_back)
             return message_to_send_back
+
+    # UTILITY
+    def pprint_message(self, message: ChatMessage, robot: "AIRobot" = None) -> None:
+        """
+        Prints the message in a visually appealing format with alternating colors.
+        Also, provides a clean copyable version of the content.
+        """
+        if not message or not message.content:
+            return
+        if not robot:
+            robot = self
+
+        robot_name = robot.__class__.__name__
+        self.console.rule(f"{robot_name}")
+        self.console.print(message.content, style=robot.color)

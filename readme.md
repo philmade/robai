@@ -4,11 +4,157 @@
 ---
 
 ## Introduction
-RobAI is a _simple_ but powerful framework designed to make working with AI models more intuitive. It is 'memory' oriented, with a simple flow of [call all the pre-call functions >> call the AI model >> call all the post-call functions]. The object passed to each function in that chain is always the memory.
+RobAI is a _simple_ but powerful framework designed to make working with AI models more intuitive. It is 'memory' oriented, with a simple flow of `[call all the pre-call functions]` >> `call the AI model` >> `[call all the post-call functions]`. The object passed to each function in that chain is always the memory.
 
 That's it.
 
 Memory is just a pydantic class where you can store anything the robot might need to 'do' whatever it needs to. Robot's need a purpose - you can imagine this as the 'system' prompt, it's what the robot is told it's purpose will be when it's initialised. Have a look at the init method - the robot's pupose is added as an initial 'system' message to it's message history. But don't worry too much about it.
+
+The framework has been written to help the code surrounding large `language` models feel closer to writing prose. Something that's intuitive and rooted in something that feels like a 'real' interaction.
+
+## What exactly happens when you call the robot?
+
+When you've finished making your robot, you'll call .process() on the robot and this is _exactly_ what will happen.
+1. Developer calls `robot.process(input)`
+2. `input` is added to the robot's `memory` object
+3. `memory` is passed from function to function in `pre_call_chain`
+4. `memory` is then sent to `ai_model` which parses the `memory.instructions_for_ai` attribute, which is always in the format of `ChatMessage(role='foo' content='this is basically the prompt)` 
+5. `robot.ai_model` then sends those parsed instructions to the AI model, and puts the response in `memory.ai_response`
+6. Robot passes the `memory` object (with a new `ai_response`) to every function in `post_call_chain`
+6. Robot returns the `memory` object
+    - If `memory.set_complete()` is called somewhere in the chain, the `memory` object is returned
+    - If `memory` is NOT complete, the `memory` is passed from `post_call_chain` to `pre_call_chain` again and it keeps going until its done
+
+As simple as this is, it's actually a very powerful setup. Robots can easily be chained together in the pre-call and post-call chains, and because you always know that the instructions_for_ai should be in the format of a ChatMessage() object, it makes these interactions much easier. When developing with Robai, you only need to use the precall functions to create `memory.instructions_for_ai` will be when it's sent to the AI model at step 4. In the `post call` functions, you can chain the robot to another robot, or process the response further, or even send the robot back to `pre-call` if the AI response is not as expected. As soon as your robot passes some test, which you set in post-call, just call memory.set_complete() and the robot will return the entire memory object.
+
+# A complete example
+## Summarising text longer than the context window allows
+
+```python
+from robai.memory import BaseMemory
+from robai.base import AIRobot
+
+# Memory only needs to have an input_model defined, which is what is passed to the robot
+# When `robot.process(input_model)` is called.
+class SummaryRobotMemory(BaseMemory):
+    input_model: str = None
+    chunks: List[str] = []
+    # The context window for gpt3.5 is now 16,000 tokens. Each chunk must be less than that.
+    # Assumes the model will summarise 10,000 tokens to 6,000 tokens.
+    chunk_length_limit: int = 10000
+    summaries: List[str] = []
+    current_chunk_index: int = 0
+    total_chunks: int = 0
+    instructions_for_ai: List[ChatMessage] = None
+
+class SummaryRobot(AIRobot):
+    def __init__(self):
+        super().__init__()
+        self.ai_model: OpenAIChatCompletion = OpenAIChatCompletion()
+        self.memory: SummaryRobotMemory = SummaryRobotMemory(
+            purpose="""
+                    Please extract all key facts of this text into a format similar to shorthand
+                    but human readable.
+                   """.strip(
+                "\n"
+            ),
+        )
+        self.pre_call_chain: List[Callable] = [
+            self.split_text_into_chunks,
+            self.provide_context_for_chunk,
+        ]
+        self.post_call_chain: List[Callable] = [
+            self.append_summary_and_check_complete,
+        ]
+    """
+    PRE CALL FUNCTIONS
+    """
+    # PRE-CALL 1
+    def split_text_into_chunks(
+        self,
+        memory: SummaryRobotMemory,
+    ) -> SummaryRobotMemory:
+        to_summarise = memory.input_model
+        chunk_length_limit = memory.chunk_length_limit
+        if not memory.chunks:
+            chunks = self.split_text_into_token_chunks(to_summarise, chunk_length_limit)
+            memory.chunks = chunks
+            memory.current_chunk_index = 0
+            memory.total_chunks = len(chunks)
+        return memory
+
+    # PRE-CALL 2
+    def provide_context_for_chunk(
+        self,
+        memory: SummaryRobotMemory,
+    ) -> SummaryRobotMemory:
+        # Pop the first chunk as the current content
+        to_summarize = memory.chunks.pop(0)
+        current_chunk_num = memory.current_chunk_index + 1
+        context = f"""
+        You are summarising text. You are at section {current_chunk_num} of {memory.total_chunks}. \n\n
+        Here's what you've summarised so far {memory.summaries}\n\n
+        You must now summarise this chunk of text and we'll add it to the summary so far: {to_summarize}\n\n
+        """
+        # the instructions for the AI model are always in the form of ChatMessages.
+        memory.instructions_for_ai = [ChatMessage(role="user", content=context)]
+        return memory
+
+    """
+    POST CALL FUNCTIONS
+    """
+    # POST-CALL 1
+    def append_summary_and_check_complete(
+        self,
+        memory: SummaryRobotMemory,
+    ) -> SummaryRobotMemory:
+        if not hasattr(memory, "summaries"):
+            memory.summaries = []
+        # APPEND THE SUMMARY WE HAVE RECEIVED TO THE LIST OF SUMMARIES
+        memory.summaries.append(memory.ai_response.content)
+        memory.current_chunk_index += 1
+        # CHECK IF WE ARE DONE
+        if memory.current_chunk_index == memory.total_chunks:
+            # There are no more chunks to summarise,
+            # we are done. memory.set_complete() means the robot will not go back to pre-call.
+            memory.set_complete()
+        else:
+            # There are more chunks to summarise. We are not done.
+            # The robot sends everything back to pre-call and
+            # we'll summarise the next chunk.
+            # Note that in pre-call we pop() the chunks, so when they're processed they are gone.
+            pass
+
+        return memory
+
+    # UTILITY
+    def split_text_into_token_chunks(
+        self, text: str, chunk_length_limit: int
+    ) -> List[str]:
+        """
+        Split the text into chunks based on an estimated token count.
+        """
+        average_tokens_per_word = 1.5
+        words = text.split()
+        words_per_chunk = int(chunk_length_limit / average_tokens_per_word)
+
+        chunks = []
+        for i in range(0, len(words), words_per_chunk):
+            chunks.append(" ".join(words[i : i + words_per_chunk]))
+
+        return chunks
+
+
+text_to_summarise = """current state-of-the-art in propulsion, material science, energy production and storage.
+        The knowledge we stand to gain should spur us toward a more enlightened and sustainable future,
+        one where collective curiosity is ignited, and global cooperation becomes the norm, rather than the
+        exception.
+        Thank You ."""
+input_model: str = text_to_summarise
+memory = robot.process(input_model)
+robot.console.print(memory.ai_response)
+
+```
 
 ### Installation
 Installation Instructions:

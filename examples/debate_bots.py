@@ -97,11 +97,9 @@ if __name__ == "__main__":
     # WRITE SOME POETRY
     memory = debate_bot.process(story_suggestion)
     debate_bot_response = memory.ai_response
-    debate_bot.printer.pprint_message(robot=debate_bot, message=memory.ai_response)
+    debate_bot.pprint_message(message=memory.ai_response)
     # pprint_color([message.dict() for message in memory.message_history])
 
     # CALL ANOTHER ROBOT AND ASK FOR HELP
-    debate_bot.memory.in_robo_call = True
-    critique_bot.memory.in_robo_call = True
     debate_bot.memory.instructions_for_ai = [debate_bot_response]
     debate_bot.robo_call(robot_I_want_to_call=critique_bot)
