@@ -4,13 +4,17 @@
 ---
 
 ## Introduction
+![Robai robot](img/robai.png)
 RobAI is a _simple_ but powerful framework designed to make working with AI models more intuitive. It is 'memory' oriented, with a simple flow: it calls all the pre-call functions, it then calls the AI model, then it calls all the post-call functions. 
 
 The common object at every step of the journey is the `memory` object, of type `BaseMemory`. The memory is always available on the robot at `robot.memory`
 
 That's it. When the robot is finished, it returns its memory object. Memory is just a pydantic class where you can store anything the robot might need to 'do' whatever it's tasked with. 
 
-Robots need a `purpose`, and as you might have guessed, the purpose of the robot is stored in the robot's memory at `robot.memory.purpose`. You might imagine this as the robot's 'system prompt', it's what the robot is told it's purpose will be when it's initialised. Have a look at the 'AIRobot' init method and you'll see that the robot's pupose is added as an initial 'system' message to it's message history. 
+## Focus on the robot's memory
+
+
+Robots a memory, and they need a `purpose`. As you might have guessed, the purpose of the robot is stored in the robot's memory at `robot.memory.purpose`. You might imagine this as the robot's 'system prompt', it's what the robot is told it's purpose will be when it's initialised. Have a look at the 'AIRobot' init method and you'll see that the robot's pupose is added as an initial 'system' message to it's message history. 
 
 The framework has been written so that writing code for large *language* models feel closer to writing *language*. Writing AI code should feel intuitive, it should be rooted in concepts familiar to humans, and the code should read like a 'real' interaction. For things to feel familiar, we have to know exactly what happens when we call process on our robot at `robot.process(some_input_string_or_model)`
 
