@@ -44,8 +44,12 @@ class SimpleRobot(AIRobot):
         return memory
 
     """
-    ROBOT NOW CALLS AI_MODEL USING MEMORY.INSTRUCTIONS_FOR_AI AS THE PROMPT, effectively doing this:
+    ROBOT NOW CALLS AI_MODEL 
+    It uses memory.instructions_for_ai as the prompt.
+    effectively, it's doing this: 
     robot.ai_model.call(memory.instructions_for_ai)
+    Whatever response it gets will be stored as a ChatMessage in the memory here:
+    memory.ai_response
     """
 
     # ==== THE POST-CALL FUNCTIONS =====
