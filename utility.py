@@ -7,11 +7,34 @@ from pygments.lexers import PythonLexer
 from pygments.styles import get_style_by_name
 from faker import Faker
 from robai.in_out import ChatMessage
-from rich.panel import Panel
 from rich.console import Console
-from rich.theme import Theme
+from rich.pretty import pprint
 
 fake = Faker()
+
+
+class CustomConsole(Console):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def pprint(self, message: object) -> None:
+        """
+        Prints the message in a visually appealing format with alternating colors.
+        Also, provides a clean copyable version of the content.
+        """
+        pprint(console=self, _object=message)
+
+    def pprint_message(self, message: ChatMessage, robot: "AIRobot" = None) -> None:
+        """
+        Prints the message in a visually appealing format with alternating colors.
+        Also, provides a clean copyable version of the content.
+        """
+        if not robot:
+            robot = self
+
+        robot_name = robot.__class__.__name__
+        self.rule(f"{robot_name}")
+        pprint(console=self, _object=message)
 
 
 class FakeCompletion:
@@ -124,68 +147,6 @@ class fakeOpenAI:
     api_key = "dummy"
     Completion = FakeCompletion()
     ChatCompletion = FakeChatCompletion()
-
-
-def pprint_color(obj: Any, style_name: str = "github-dark") -> None:
-    """Pretty-print in color."""
-    from pygments import styles
-
-    styles.STYLE_MAP
-    style = get_style_by_name(style_name)
-    formatter = Terminal256Formatter(style=style)
-    formatted_string = pformat(obj)
-    formatted_string = formatted_string.strip("'\n")
-    formatted_string = formatted_string.replace("\\n", "\n")
-    print(highlight(formatted_string, PythonLexer(), formatter), end="")
-
-
-class MessagePrinter:
-    def __init__(self):
-        self.color_state = False
-        theme = Theme(
-            {
-                "red": "red",
-                "blue": "blue",
-                "green": "green",
-                "yellow": "yellow",
-                "cyan": "cyan",
-                "magenta": "magenta",
-            }
-        )
-        self.console = Console(theme=theme, width=100)
-
-    def toggle_color(self):
-        """Toggles between two states, allowing us to alternate colors."""
-        self.color_state = not self.color_state
-
-    def get_color(self):
-        return "\033[32m" if self.color_state else "\033[34m"
-
-    def get_color(self, robot: "AIRobot") -> str:
-        colors = {
-            "red": "\033[91m",
-            "blue": "\033[94m",
-            "green": "\033[92m",
-            "yellow": "\033[93m",
-            "cyan": "\033[96m",
-            "magenta": "\033[95m",
-        }
-        return colors.get(robot.color, "\033[0m")  # default to reset color
-
-    def reset_color(self):
-        return "\033[0m"
-
-    def pprint_color(self, obj: Any, style_name: str = "github-dark") -> None:
-        """Pretty-print in color."""
-        from pygments import styles
-
-        styles.STYLE_MAP
-        style = get_style_by_name(style_name)
-        formatter = Terminal256Formatter(style=style)
-        formatted_string = pformat(obj)
-        formatted_string = formatted_string.strip("'\n")
-        formatted_string = formatted_string.replace("\\n", "\n")
-        print(highlight(formatted_string, PythonLexer(), formatter), end="")
 
 
 # Simple fake DB

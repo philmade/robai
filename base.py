@@ -2,21 +2,18 @@ from robai.languagemodels import BaseAIModel, OpenAIChatCompletion
 from robai.errors import AIRobotInitializationError, SerializationError
 from robai.memory import BaseMemory, ChatMessage, SimpleChatMemory
 from robai.chains import do_nothing_in_post_call, simply_create_instructions
-from robai.utility import pprint_color, MessagePrinter
-from typing import Any, List, Callable, Generator, Union, Tuple, Type, Self
+from robai.utility import CustomConsole
+from typing import Any, List, Callable, Generator, Self
 from pydantic import BaseModel
 import inspect
 from loguru import logger
 import asyncio
 import json
-from abc import ABC, abstractmethod
-
-from typing import TypeVar, Generic, Type
+from abc import ABC
 import random
-from rich import print as rprint
-from rich.panel import Panel
 from rich.console import Console
 from rich.theme import Theme
+from rich.pretty import pprint
 
 
 class AIRobot(ABC):
@@ -61,12 +58,11 @@ class AIRobot(ABC):
             ["red", "blue", "green", "yellow", "cyan", "magenta"]
         )
         self.logging_enabled = logging_enabled
-        self.console = Console(theme=self.theme, width=100)
+        self.console = CustomConsole(theme=self.theme, width=100)
         if self.logging_enabled:
             self.console.rule(f"[cyan]Initializing {self.__class__.__name__}")
-            self.console.print(f"Initialized robot: {self.__class__.__name__}")
-            self.console.print(f"Robot's Purpose: {self.memory.purpose}")
-            self.console.print(f"Robot's Memory: {self.memory}")
+            self.console.pprint(self.memory.purpose)
+            self.console.pprint(self.memory)
             self.console.rule("[cyan]Initialization Complete")
 
     def process(self, input: BaseModel, stream: bool = False) -> BaseMemory:
@@ -97,6 +93,8 @@ class AIRobot(ABC):
                         ]  # Consume generator
 
                     else:  # Regular synchronous function
+                        if self.logging_enabled:
+                            self.console.print(f"calling [yellow]{function.__name__}()")
                         self.memory = function(self.memory)
                 except AttributeError as e:
                     logger.info(
@@ -107,7 +105,7 @@ class AIRobot(ABC):
                         f"Exception in {function.__name__} in pre-call chain: {e}"
                     )
             if self.logging_enabled:
-                self.console.print("[white]DONE WITH PRE-CALL")
+                self.console.rule("[white]DONE WITH PRE-CALL")
 
             # Call to AI model
             if self.logging_enabled:
@@ -142,7 +140,9 @@ class AIRobot(ABC):
                         gen = function(streamed_response, self.memory)
                         return gen
                     else:  # Regular synchronous function
-                        self.memory = function(self.memory)
+                        if self.logging_enabled:
+                            self.console.print(f"calling [yellow]{function.__name__}()")
+                            self.memory = function(self.memory)
 
                 except AttributeError as e:
                     logger.info(
@@ -153,7 +153,7 @@ class AIRobot(ABC):
                         f"Exception in {function.__name__} in post-call chain: {e}"
                     )
             if self.logging_enabled:
-                self.console.print("[white]DONE WITH POST-CALL")
+                self.console.rule("[white]DONE WITH POST-CALL")
 
             if self.logging_enabled:
                 self.console.rule("[magenta]Processing Complete - returning memory")
@@ -372,18 +372,3 @@ class AIRobot(ABC):
                 )
             self.memory.add_message_to_history(message_to_send_back)
             return message_to_send_back
-
-    # UTILITY
-    def pprint_message(self, message: ChatMessage, robot: "AIRobot" = None) -> None:
-        """
-        Prints the message in a visually appealing format with alternating colors.
-        Also, provides a clean copyable version of the content.
-        """
-        if not message or not message.content:
-            return
-        if not robot:
-            robot = self
-
-        robot_name = robot.__class__.__name__
-        self.console.rule(f"{robot_name}")
-        self.console.print(message.content, style=robot.color)
