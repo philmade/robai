@@ -34,6 +34,7 @@ class SimpleRobot(AIRobot):
         self.post_call_chain = [self.stop_the_robot]
         self.ai_model = OpenAIChatCompletion()
 
+    # ==== THE PRE-CALL FUNCTIONS =====
     def remember_user_interaction(self, memory: SimpleChatMemory) -> SimpleChatMemory:
         memory.add_message_to_history(memory.input_model)
         return memory
