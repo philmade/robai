@@ -16,6 +16,9 @@ A robot's 'input' is defined in the memory at memory.input_model. For reasons th
 
 That's it. When the robot is finished, it returns its memory object. Memory is just a pydantic class where you can store anything the robot might need to 'do' whatever it's tasked with.
 
+## Why?
+The framework has been written so that writing code for large *language* models feel closer to writing *language*. Writing AI code should feel intuitive, it should be rooted in concepts familiar to humans, and the code should read like a 'real' interaction. For things to feel familiar, we have to know exactly what happens when we call process on our robot at `robot.process(some_input_string_or_model)`. Also, by standardising the instructions to be a list of ChatMessage objects, chaining together robots becomes trivial, and there are some examples of that in the examples folder. You can place another robot and call its process() function in pre-call or post-call, and you now have chained together robots that are each working until their task is complete.
+
 ## A simple example
 
 ```python
@@ -71,9 +74,8 @@ if __name__ == "__main__":
 
 ```
 
-
 ## A focus on memory
-Robots need memory, and they need a `purpose`. As you might have guessed, the purpose of the robot is stored in the robot's memory at `robot.memory.purpose`. It acts as the robot's 'system prompt'. Have a look at the `AIRobot.__init__()` and you'll see that the robot's pupose is added to its own message history as a 'system' message. So the purpose is important. The rest of the memory is there to be useful to you the developer. You'll need to store state, variables, context, whatever you might need, add it to the memory object.
+Robots need memory, and they need a `purpose`. As you might have guessed, the purpose of the robot is stored in the robot's memory at `robot.memory.purpose`. It acts as the robot's 'system prompt'. Have a look at the `AIRobot.__init__()` and you'll see that the robot's pupose is added to its own message history as a 'system' message. So the purpose is important. The rest of the memory is there to be useful to you the developer. Whenever you need to store state, variables, context, or anything else, your almost certainly want to add it to the memory object.
 
 ## What about inputs and outputs?
 When you call `process()` on the robot, you need to pass an `input_model`, this really can be anything you like. This `input_model` attribute has to be defined on whatever memory you give to the robot. Then you'll know that (its very likely that) the first thing your robot needs to do, in the very first function it calls in the pre-call chain, is to parse that input model and eventually turn it to a set of `memory.instructions_for_ai`. The `memory.input_model` instance is passed into the robot's memory via `robot.process()`. Your robot must then somehow create `memory.instructions_for_ai` as a list of `[ChatMessage]` objects by the end of your pre-call functions. How you do this is entirely up to you.
@@ -173,9 +175,6 @@ if __name__ == "__main__":
     result = poetry_robot.process(some_input_might_be)
 
 ```
-
-## Why?
-The framework has been written so that writing code for large *language* models feel closer to writing *language*. Writing AI code should feel intuitive, it should be rooted in concepts familiar to humans, and the code should read like a 'real' interaction. For things to feel familiar, we have to know exactly what happens when we call process on our robot at `robot.process(some_input_string_or_model)`. Also, by standardising the instructions to be a list of ChatMessage objects, chaining together robots becomes trivial, and there are some examples of that in the examples folder. You can place another robot and call its process() function in pre-call or post-call, and you now have chained together robots that are each working until their task is complete.
 
 ## What exactly happens when you call the robot?
 
