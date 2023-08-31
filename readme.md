@@ -1,6 +1,4 @@
-
-# RobAI Framework Documentation
-
+# RobAI - a micro-framework for OpenAi, LLMs and Llama
 ---
 
 ![Robai robot](img/robai.png)
