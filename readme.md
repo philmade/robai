@@ -17,7 +17,26 @@ A robot's 'input' is defined in the memory at memory.input_model. For reasons th
 That's it. When the robot is finished, it returns its memory object. Memory is just a pydantic class where you can store anything the robot might need to 'do' whatever it's tasked with.
 
 ## Why?
-The framework has been written so that writing code for large *language* models feel closer to writing *language*. Writing AI code should feel intuitive, it should be rooted in concepts familiar to humans, and the code should read like a 'real' interaction. For things to feel familiar, we have to know exactly what happens when we call process on our robot at `robot.process(some_input_string_or_model)`. Also, by standardising the instructions to be a list of ChatMessage objects, chaining together robots becomes trivial, and there are some examples of that in the examples folder. You can place another robot and call its process() function in pre-call or post-call, and you now have chained together robots that are each working until their task is complete.
+The framework has been written so that writing code for large *language* models feel closer to writing *language*. Writing AI code should feel intuitive, it should be rooted in concepts familiar to humans, and the code should read like a 'real' interaction. For things to feel familiar, we have to know exactly what happens when we call process on our robot at `robot.process(some_input_string_or_model)`. 
+
+Also, by standardising the instructions to be a list of ChatMessage objects, chaining together robots becomes trivial, and there are some examples of that in the examples folder. You can place another robot and call its process() function in pre-call or post-call, and you now have chained together robots that are each working until their task is complete.
+
+## What exactly happens when you call the robot?
+
+When you've finished making your robot, you'll call .process() on the robot and this is _exactly_ what will happen.
+1. Developer calls `robot.process(input)`
+2. `input` is added to the robot's `memory` object at `robot.memory.input_model`
+3. `memory` is passed from function to function in the `pre_call_chain`
+4. `memory` is then sent to `robot.ai_model` which parses the `robot.memory.instructions_for_ai` attribute, which is always a list of `ChatMessage(role='foo' content='this is basically the prompt)` objects. 
+5. `robot.ai_model` then sends those parsed instructions to the AI model, and puts the response in `memory.ai_response`
+6. Robot passes the `memory` object (with a new `ai_response`) to every function in `post_call_chain`
+6. Robot returns the `memory` object
+    - If `memory.set_complete()` is called somewhere in the chain (usually post-call), the `memory` object is returned
+    - If `memory` is NOT complete, the `memory` is passed from `post_call_chain` to `pre_call_chain` again and it keeps going until something triggers `memory.set_complete()` in the chain.
+
+As simple as this is, it's actually a very powerful and flexible setup. Robots can easily be chained together in the pre-call and post-call chains because you can rely on the fact that `memory.instructions_for_ai` will *always* be `List[ChatMessage]`. Whatever you're doing with a large language model, you can certainly 'do it' via the medium of ChatMessage objects. Standardising this drastically reduces complexity.
+
+When developing with Robai, you only need to use the `pre-call` functions to create the `memory.instructions_for_ai` for the AI model at step 4. In the `post-call` functions, you can chain the robot to another robot, process the response further, or even send the robot back to `pre-call` if the AI response is not as expected. You really can do whatever you like as long as you stop the robot at some point in post-call, and in pre-call you create a set of instructions. Just call `memory.set_complete()` and the robot will return the entire memory object. 
 
 ## A simple example
 
@@ -175,23 +194,6 @@ if __name__ == "__main__":
     result = poetry_robot.process(some_input_might_be)
 
 ```
-
-## What exactly happens when you call the robot?
-
-When you've finished making your robot, you'll call .process() on the robot and this is _exactly_ what will happen.
-1. Developer calls `robot.process(input)`
-2. `input` is added to the robot's `memory` object at `robot.memory.input_model`
-3. `memory` is passed from function to function in the `pre_call_chain`
-4. `memory` is then sent to `robot.ai_model` which parses the `robot.memory.instructions_for_ai` attribute, which is always a list of `ChatMessage(role='foo' content='this is basically the prompt)` objects. 
-5. `robot.ai_model` then sends those parsed instructions to the AI model, and puts the response in `memory.ai_response`
-6. Robot passes the `memory` object (with a new `ai_response`) to every function in `post_call_chain`
-6. Robot returns the `memory` object
-    - If `memory.set_complete()` is called somewhere in the chain (usually post-call), the `memory` object is returned
-    - If `memory` is NOT complete, the `memory` is passed from `post_call_chain` to `pre_call_chain` again and it keeps going until something triggers `memory.set_complete()` in the chain.
-
-As simple as this is, it's actually a very powerful and flexible setup. Robots can easily be chained together in the pre-call and post-call chains because you can rely on the fact that `memory.instructions_for_ai` will *always* be `List[ChatMessage]`. Whatever you're doing with a large language model, you can certainly 'do it' via the medium of ChatMessage objects. Standardising this drastically reduces complexity.
-
-When developing with Robai, you only need to use the `pre-call` functions to create the `memory.instructions_for_ai` for the AI model at step 4. In the `post-call` functions, you can chain the robot to another robot, process the response further, or even send the robot back to `pre-call` if the AI response is not as expected. You really can do whatever you like as long as you stop the robot at some point in post-call, and in pre-call you create a set of instructions. Just call `memory.set_complete()` and the robot will return the entire memory object. 
 
 # A more involved example
 ### Summarising text
