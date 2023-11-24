@@ -1,9 +1,13 @@
-from robai.languagemodels import BaseAIModel, OpenAIChatCompletion
+from robai.languagemodels import (
+    BaseAIModel,
+    OpenAIChatCompletion,
+    FakeAICompletion,
+)
 from robai.errors import AIRobotInitializationError, SerializationError
 from robai.memory import BaseMemory, ChatMessage, SimpleChatMemory
 from robai.chains import do_nothing_in_post_call, simply_create_instructions
 from robai.utility import CustomConsole
-from typing import Any, List, Callable, Generator, Self
+from typing import Any, List, Callable, Generator, Self, get_type_hints
 from pydantic import BaseModel
 import inspect
 from loguru import logger
@@ -14,28 +18,39 @@ import random
 from rich.console import Console
 from rich.theme import Theme
 from rich.pretty import pprint
+from fastapi import WebSocket
 
 
 class AIRobot(ABC):
     def __init__(
         self,
-        memory: BaseMemory = SimpleChatMemory(),
-        ai_model: BaseAIModel = OpenAIChatCompletion(),
+        memory: BaseMemory = None,
+        ai_model: BaseAIModel = None,
         pre_call_chain: List[Callable] = simply_create_instructions,
         post_call_chain: List[Callable] = do_nothing_in_post_call,
         robots_functions: List[Callable] = None,
         logging_enabled: bool = True,
+        test: bool = False,
         **kwargs,
     ) -> Self:
+        self.logging_enabled = logging_enabled
         self.pre_call_chain = pre_call_chain
         self.post_call_chain = post_call_chain
         self.robots_functions = robots_functions or []
-        self.memory: BaseMemory = memory
+        if memory is None:
+            self.memory: BaseMemory = SimpleChatMemory(purpose="Chat with a human")
+        else:
+            self.memory: BaseMemory = memory
+        if ai_model is None:
+            self.ai_model: BaseAIModel = OpenAIChatCompletion()
+        elif test:
+            self.ai_model: BaseAIModel = FakeAICompletion()
+        else:
+            self.ai_model: BaseAIModel = ai_model()
         if self.memory.purpose is None or "":
             raise AIRobotInitializationError(
                 message="Memory must have a purpose to be used by a robot"
             )
-        self.ai_model: BaseAIModel = ai_model
         # self.printer = MessagePrinter()
         self.theme = Theme(
             {
@@ -52,12 +67,11 @@ class AIRobot(ABC):
             role="system",
             content=f"You are {self.__class__.__name__}, your purpose is: {self.memory.purpose}",
         )
-        self.memory.add_message_to_history(system_prompt)
         self.memory.system_prompt = system_prompt
         self.color = random.choice(
             ["red", "blue", "green", "yellow", "cyan", "magenta"]
         )
-        self.logging_enabled = logging_enabled
+
         self.console = CustomConsole(theme=self.theme, width=100)
         if self.logging_enabled:
             self.console.rule(f"[cyan]Initializing {self.__class__.__name__}")
@@ -65,106 +79,14 @@ class AIRobot(ABC):
             self.console.pprint(self.memory)
             self.console.rule("[cyan]Initialization Complete")
 
-    def process(self, input: BaseModel, stream: bool = False) -> BaseMemory:
-        """
-        # Input should be the same as self.memory.input_model
-        ## returns an instance of self.memory
-        """
+    def process(self, input_data: Any, stream: bool = False) -> BaseModel:
+        expected_type = self.memory.__annotations__["input_model"]
+        if not isinstance(input_data, expected_type):
+            raise TypeError(
+                f"Robot received an input of type {type(input_data)}, but it expected an input of type {expected_type}."
+            )
         if self.logging_enabled:
             self.console.rule("[green]Starting Pre-call Chain")
-        expected_type = self.memory.__annotations__["input_model"]
-        if not isinstance(input, expected_type):
-            raise TypeError(
-                f"Expected input of type {expected_type}, but got {type(input)}"
-            )
-        # IMPORTANT STEP - THE INPUT MUST BE ADDED TO THE MEMORY
-        self.memory.input_model = input
-        # THE USER CAN DO WHATEVER THEY WANT FROM IT FROM THERE
-        self.memory.complete = False
-        while not self.memory.complete:
-            # Pre-call chain
-            for function in self.pre_call_chain:
-                try:
-                    if inspect.isgeneratorfunction(function):  # Generator function
-                        self.memory.set_complete()
-                        gen = function(self.memory)
-                        input_model_processed = [
-                            item for item in gen
-                        ]  # Consume generator
-
-                    else:  # Regular synchronous function
-                        if self.logging_enabled:
-                            self.console.print(f"calling [yellow]{function.__name__}()")
-                        self.memory = function(self.memory)
-                except AttributeError as e:
-                    logger.info(
-                        f"Attribute error in {function.__name__} in pre-call chain: {e}. Did you forget to return memory!?"
-                    )
-                except Exception as e:
-                    logger.info(
-                        f"Exception in {function.__name__} in pre-call chain: {e}"
-                    )
-            if self.logging_enabled:
-                self.console.rule("[white]DONE WITH PRE-CALL")
-
-            # Call to AI model
-            if self.logging_enabled:
-                self.console.rule("[green]AI Model Call")
-                with self.console.status("[blue]Calling AI Model..."):
-                    self.memory = self.ai_model.call(self.memory)
-                    if stream:
-                        streamed_response: Generator = self.ai_model.call_manager(
-                            self.memory
-                        )
-                    else:
-                        self.memory = self.ai_model.call_manager(memory=self.memory)
-            else:
-                if stream:
-                    streamed_response: Generator = self.ai_model.call_manager(
-                        self.memory
-                    )
-                else:
-                    self.memory = self.ai_model.call_manager(memory=self.memory)
-
-            if self.logging_enabled:
-                self.console.print("[white]CALLED AI MODEL")
-
-            # Post-call chain
-            if self.logging_enabled:
-                self.console.rule("[blue]Starting Post-call Chain")
-
-            for function in self.post_call_chain:
-                try:
-                    if inspect.isgeneratorfunction(function):  # Generator function
-                        self.memory.set_complete()
-                        gen = function(streamed_response, self.memory)
-                        return gen
-                    else:  # Regular synchronous function
-                        if self.logging_enabled:
-                            self.console.print(f"calling [yellow]{function.__name__}()")
-                            self.memory = function(self.memory)
-
-                except AttributeError as e:
-                    logger.info(
-                        f"Attribute error in {function.__name__} in post-call chain: {e}. Did you forget to return memory!?"
-                    )
-                except Exception as e:
-                    logger.info(
-                        f"Exception in {function.__name__} in post-call chain: {e}"
-                    )
-            if self.logging_enabled:
-                self.console.rule("[white]DONE WITH POST-CALL")
-
-            if self.logging_enabled:
-                self.console.rule("[magenta]Processing Complete - returning memory")
-
-            return self.memory
-
-    async def aprocess(self, input_data: Any, stream: bool = False) -> BaseModel:
-        if not isinstance(input_data, type(self.memory.input_model)):
-            raise TypeError(
-                f"Robot recieved {type(input_data)} as input, but it expected what's in memory.input_model which is type {type(self.memory.input_model)}"
-            )
         # IMPORTANT STEP - THE INPUT MUST BE ADDED TO THE MEMORY
         self.memory.input_model = input_data
         # THE USER CAN DO WHATEVER THEY WANT FROM IT FROM THERE
@@ -172,51 +94,118 @@ class AIRobot(ABC):
         while not self.memory.complete:
             # Pre-call chain
             for function in self.pre_call_chain:
+                if self.logging_enabled:
+                    self.console.print(f"calling [yellow]{function.__name__}()")
                 try:
-                    if asyncio.iscoroutinefunction(function):  # Async function
-                        self.memory = await function(self.memory)
-                    elif inspect.isgeneratorfunction(function):  # Generator function
-                        self.memory.set_complete()
-                        gen = function(self.memory)
-                        input_model_processed = [
-                            item for item in gen
-                        ]  # Consume generator
-
-                    else:  # Regular synchronous function
-                        self.memory = function(self.memory)
+                    function()
                 except Exception as e:
                     logger.info(
                         f"Exception in {function.__name__} in pre-call chain: {e}"
                     )
+            if self.logging_enabled:
+                self.console.rule("[white]DONE WITH PRE-CALL")
 
-            try:
-                json.dumps(self.memory.instructions_for_ai)
-            except TypeError:
+            # CHECK WE HAVE A LIST OF CHAT MESSAGES
+            if not isinstance(self.memory.instructions_for_ai[0], ChatMessage):
                 raise SerializationError(
-                    message=f"Your final function in pre-call isn't setting memory.instructions_for_ai to something that's JSON serializable, got: {input_model_processed} instead"
+                    message=f"Your final function in pre-call isn't setting memory.instructions_for_ai to a list of ChatMessage, got: {self.memory.instructions_for_ai} instead"
+                )
+            # Call to AI model
+            if self.logging_enabled:
+                self.console.rule("[green]AI Model Call")
+                with self.console.status("[blue]Calling AI Model..."):
+                    self.memory = self.ai_model.call_manager(
+                        memory=self.memory, stream=stream
+                    )
+            else:
+                self.memory = self.ai_model.call_manager(
+                    memory=self.memory, stream=stream
                 )
 
+            if self.logging_enabled:
+                self.console.print("[white]CALLED AI MODEL")
+
+            # Post-call chain
+            for function in self.post_call_chain:
+                try:
+                    if self.logging_enabled:
+                        self.console.print(f"calling [yellow]{function.__name__}()")
+                    function()
+                except Exception as e:
+                    logger.info(
+                        f"Exception in {function.__name__} in post-call chain: {e}"
+                    )
+            if self.logging_enabled:
+                self.console.rule("[white]DONE WITH POST-CALL")
+                self.console.rule("[magenta]Processing Complete - returning memory")
+
+        return self.memory
+
+    async def aprocess(self, input_data: Any, stream: bool = False) -> BaseModel:
+        expected_type = self.memory.__annotations__["input_model"]
+        if not isinstance(input_data, expected_type):
+            raise TypeError(
+                f"Robot received an input of type {type(input_data)}, but it expected an input of type {expected_type}."
+            )
+        if self.logging_enabled:
+            self.console.rule("[green]Starting Pre-call Chain")
+        # IMPORTANT STEP - THE INPUT MUST BE ADDED TO THE MEMORY
+        self.memory.input_model = input_data
+        # THE USER CAN DO WHATEVER THEY WANT FROM IT FROM THERE
+        self.memory.complete = False
+        while not self.memory.complete:
+            # Pre-call chain
+            for function in self.pre_call_chain:
+                if self.logging_enabled:
+                    self.console.print(f"calling [yellow]{function.__name__}()")
+                try:
+                    if asyncio.iscoroutinefunction(function):  # Async function
+                        await function()
+                    else:  # Regular synchronous function
+                        function()
+                except Exception as e:
+                    logger.info(
+                        f"Exception in {function.__name__} in pre-call chain: {e}"
+                    )
+            if self.logging_enabled:
+                self.console.rule("[white]DONE WITH PRE-CALL")
+
+            # CHECK WE HAVE A LIST OF CHAT MESSAGES
+            if not isinstance(self.memory.instructions_for_ai[0], ChatMessage):
+                raise SerializationError(
+                    message=f"Your final function in pre-call isn't setting memory.instructions_for_ai to a list of ChatMessage, got: {self.memory.instructions_for_ai} instead"
+                )
             # Call to AI model
-            if stream:
-                streamed_response: Generator = self.ai_model.stream_call(self.memory)
+            if self.logging_enabled:
+                self.console.rule("[green]AI Model Call")
+                with self.console.status("[blue]Calling AI Model..."):
+                    self.memory = self.ai_model.call_manager(
+                        memory=self.memory, stream=stream
+                    )
             else:
-                self.memory: BaseMemory = self.ai_model.call(self.memory)
+                self.memory = self.ai_model.call_manager(
+                    memory=self.memory, stream=stream
+                )
+
+            if self.logging_enabled:
+                self.console.print("[white]CALLED AI MODEL")
 
             # Post-call chain
             for function in self.post_call_chain:
                 try:
                     if asyncio.iscoroutinefunction(function):  # Async function
-                        self.memory = await function(self.memory)
-                    elif inspect.isgeneratorfunction(function):  # Generator function
-                        self.memory.set_complete()
-                        gen = function(streamed_response, self.memory)
-                        return gen
+                        await function()
                     else:  # Regular synchronous function
-                        self.memory = function(self.memory)
+                        if self.logging_enabled:
+                            self.console.print(f"calling [yellow]{function.__name__}()")
+                        function()
                 except Exception as e:
                     logger.info(
                         f"Exception in {function.__name__} in post-call chain: {e}"
                     )
+            if self.logging_enabled:
+                self.console.rule("[white]DONE WITH POST-CALL")
+                self.console.rule("[magenta]Processing Complete - returning memory")
 
         return self.memory
 
@@ -224,6 +213,8 @@ class AIRobot(ABC):
         return "\n".join(
             [message.content for message in self.memory.message_history if message]
         )
+
+    # ROBOCALL - MUST FINISH
 
     def robot_call_header(self, robot: "AIRobot") -> str:
         return f"\n\nROBOT API CALL INSTRUCTIONS: YOU ARE IN A ROBOT TO ROBOT API CALL. WHEN THE EXCHANGE IS DONE, YOU MUST SAY THE WORD ROBOCALL-END TO END THE CALL."

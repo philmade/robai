@@ -102,8 +102,8 @@ class BaseAIModel(ABC):
         You probably don't want to override this method. But maybe there's a reason I don't know
         """
         if stream:
-            generator_response = self.stream_call(memory)
-            return generator_response
+            memory = self.stream_call(memory=memory)
+            return memory
         else:
             memory = self.call(memory=memory)
             return memory
@@ -228,20 +228,17 @@ class OpenAIChatCompletion(OpenAICompletion):
         return memory
 
     def stream_call(self, memory: BaseMemory) -> Generator:
-        response = self.openai.ChatCompletion.create(
+        instructions_for_ai = [
+            message.dict() for message in memory.instructions_for_ai if message
+        ]
+        response_generator = self.openai.ChatCompletion.create(
             model=self.model,
-            messages=memory.instructions_for_ai,
+            messages=instructions_for_ai,
             temperature=self.temperature,
             stop=self.stop,
             max_tokens=1000,
             stream=True,  # Enable streaming
         )
 
-        # Yield each chunk of the response as it becomes available
-        for chunk in response:
-            streamed_response: str = (
-                chunk.choices[0].delta.content
-                if "content" in chunk.choices[0].delta
-                else None
-            )
-            yield streamed_response
+        memory.ai_response_generator = response_generator
+        return memory
