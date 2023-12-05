@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.theme import Theme
 from rich.pretty import pprint
 from fastapi import WebSocket
+import traceback
 
 
 class AIRobot(ABC):
@@ -99,8 +100,9 @@ class AIRobot(ABC):
                 try:
                     function()
                 except Exception as e:
+                    exc_info = traceback.format_exc()
                     logger.info(
-                        f"Exception in {function.__name__} in pre-call chain: {e}"
+                        f"Exception in {function.__name__} in pre-call chain: {e}\n{exc_info}"
                     )
             if self.logging_enabled:
                 self.console.rule("[white]DONE WITH PRE-CALL")
@@ -132,8 +134,9 @@ class AIRobot(ABC):
                         self.console.print(f"calling [yellow]{function.__name__}()")
                     function()
                 except Exception as e:
+                    exc_info = traceback.format_exc()
                     logger.info(
-                        f"Exception in {function.__name__} in post-call chain: {e}"
+                        f"Exception in {function.__name__} in post-call chain: {e}\n{exc_info}"
                     )
             if self.logging_enabled:
                 self.console.rule("[white]DONE WITH POST-CALL")
@@ -164,9 +167,11 @@ class AIRobot(ABC):
                     else:  # Regular synchronous function
                         function()
                 except Exception as e:
+                    exc_info = traceback.format_exc()
                     logger.info(
-                        f"Exception in {function.__name__} in pre-call chain: {e}"
+                        f"Exception in {function.__name__} in pre-call chain: {e}\n{exc_info}"
                     )
+
             if self.logging_enabled:
                 self.console.rule("[white]DONE WITH PRE-CALL")
 
@@ -200,8 +205,9 @@ class AIRobot(ABC):
                             self.console.print(f"calling [yellow]{function.__name__}()")
                         function()
                 except Exception as e:
+                    exc_info = traceback.format_exc()
                     logger.info(
-                        f"Exception in {function.__name__} in post-call chain: {e}"
+                        f"Exception in {function.__name__} in post-call chain: {e}\n{exc_info}"
                     )
             if self.logging_enabled:
                 self.console.rule("[white]DONE WITH POST-CALL")
