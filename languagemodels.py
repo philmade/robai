@@ -15,7 +15,6 @@ import os
 from typing import Any, Union, Optional, List, Generator
 from robai.in_out import ChatMessage
 from robai.memory import BaseMemory
-from dotenv import load_dotenv
 from robai.utility import fakeOpenAI
 
 
@@ -168,7 +167,6 @@ class OpenAICompletion(BaseAIModel):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        load_dotenv()
         API_KEY = os.getenv("OPENAI_API_KEY")
         if API_KEY is None:
             raise ValueError("OPENAI_API_KEY environment variable not set.")
