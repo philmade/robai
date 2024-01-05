@@ -11,6 +11,7 @@ except ImportError:
         "OpenAI API not installed, using fakeOpenAI - this is for testing only, it returns nonsense"
     )
     from robai.utility import interactiveOpenAI as openai
+from openai import AsyncOpenAI
 import os
 from typing import Any, Union, Optional, List, Generator
 from robai.in_out import ChatMessage
@@ -92,6 +93,12 @@ class BaseAIModel(ABC):
         """
         pass
 
+    async def acall(self, memory: BaseMemory) -> BaseMemory:
+        pass
+
+    async def astream_call(self, memory: BaseMemory) -> Generator:
+        pass
+
     def call_manager(
         self, memory: BaseMemory, stream=False, **kwargs
     ) -> Union[BaseMemory, Generator]:
@@ -105,6 +112,21 @@ class BaseAIModel(ABC):
             return memory
         else:
             memory = self.call(memory=memory)
+            return memory
+
+    async def acall_manager(
+        self, memory: BaseMemory, stream=False, **kwargs
+    ) -> Union[BaseMemory, Generator]:
+        """
+        When you call process() on the robot, ulimately, this is the method that is called.
+        In the very least it needs call() to be implemented.
+        You probably don't want to override this method. But maybe there's a reason I don't know
+        """
+        if stream:
+            memory = await self.astream_call(memory=memory)
+            return memory
+        else:
+            memory = await self.acall(memory=memory)
             return memory
 
     def __init_subclass__(cls, **kwargs):
@@ -202,6 +224,9 @@ class OpenAICompletion(BaseAIModel):
         return memory
 
 
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
 class OpenAIChatCompletion(OpenAICompletion):
     instructions_for_ai: List[ChatMessage] = List[ChatMessage]
 
@@ -210,7 +235,7 @@ class OpenAIChatCompletion(OpenAICompletion):
 
     def call(self, memory: BaseMemory) -> BaseMemory:
         instructions_for_ai = [
-            message.dict() for message in memory.instructions_for_ai if message
+            message.model_dump() for message in memory.instructions_for_ai if message
         ]
         response = self.openai.ChatCompletion.create(
             model=self.model,
@@ -225,11 +250,43 @@ class OpenAIChatCompletion(OpenAICompletion):
         )
         return memory
 
+    async def acall(self, memory: BaseMemory) -> BaseMemory:
+        instructions_for_ai = [
+            message.model_dump() for message in memory.instructions_for_ai if message
+        ]
+        response = await client.chat.completions.create(
+            model=self.model,
+            messages=instructions_for_ai,
+            temperature=self.temperature,
+            stop=self.stop,
+            max_tokens=self.max_tokens,
+        )
+        memory.ai_raw_response = response
+        memory.ai_response = ChatMessage(
+            role="assistant", content=response.choices[0].message.content
+        )
+
     def stream_call(self, memory: BaseMemory) -> Generator:
         instructions_for_ai = [
             message.dict() for message in memory.instructions_for_ai if message
         ]
         response_generator = self.openai.ChatCompletion.create(
+            model=self.model,
+            messages=instructions_for_ai,
+            temperature=self.temperature,
+            stop=self.stop,
+            max_tokens=1000,
+            stream=True,  # Enable streaming
+        )
+
+        memory.ai_response_generator = response_generator
+        return memory
+
+    async def astream_call(self, memory: BaseMemory) -> Generator:
+        instructions_for_ai = [
+            message.dict() for message in memory.instructions_for_ai if message
+        ]
+        response_generator = await client.chat.completions.create(
             model=self.model,
             messages=instructions_for_ai,
             temperature=self.temperature,

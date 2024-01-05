@@ -32,6 +32,7 @@ class AIRobot(ABC):
         robots_functions: List[Callable] = None,
         logging_enabled: bool = True,
         test: bool = False,
+        _async: bool = False,
         **kwargs,
     ) -> Self:
         self.logging_enabled = logging_enabled
@@ -188,7 +189,7 @@ class AIRobot(ABC):
                         memory=self.memory, stream=stream
                     )
             else:
-                self.memory = self.ai_model.call_manager(
+                self.memory = await self.ai_model.acall_manager(
                     memory=self.memory, stream=stream
                 )
 
