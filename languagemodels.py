@@ -170,7 +170,7 @@ class FakeAICompletion(BaseAIModel):
 
 class OpenAICompletion(BaseAIModel):
     instructions_for_ai: str = str
-    model: str = "gpt-3.5-turbo-16k"
+    model: str = "gpt-4-0613"
     suffix: str = ""
     max_tokens: int = 1000
     temperature: float = 0.0
