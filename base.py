@@ -3,6 +3,7 @@ from robai.languagemodels import (
     OpenAIChatCompletion,
     FakeAICompletion,
 )
+from pydantic import ValidationError
 from robai.errors import AIRobotInitializationError, SerializationError
 from robai.memory import BaseMemory, ChatMessage, SimpleChatMemory
 from robai.chains import do_nothing_in_post_call, simply_create_instructions
@@ -145,16 +146,14 @@ class AIRobot(ABC):
 
         return self.memory
 
-    async def aprocess(self, input_data: Any, stream: bool = False) -> BaseModel:
-        expected_type = self.memory.__annotations__["input_model"]
-        if not isinstance(input_data, expected_type):
-            raise TypeError(
-                f"Robot received an input of type {type(input_data)}, but it expected an input of type {expected_type}."
-            )
+    async def aprocess(self, stream: bool = False) -> BaseModel:
+        # Validate the memory object
+        try:
+            self.memory.model_validate(self.memory)
+        except ValidationError as e:
+            raise ValueError(f"Invalid memory object: {e}")
         if self.logging_enabled:
             self.console.rule("[green]Starting Pre-call Chain")
-        # IMPORTANT STEP - THE INPUT MUST BE ADDED TO THE MEMORY
-        self.memory.input_model = input_data
         # THE USER CAN DO WHATEVER THEY WANT FROM IT FROM THERE
         self.memory.complete = False
         while not self.memory.complete:

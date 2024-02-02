@@ -170,7 +170,7 @@ class FakeAICompletion(BaseAIModel):
 
 class OpenAICompletion(BaseAIModel):
     instructions_for_ai: str = str
-    model: str = "gpt-4-0613"
+    model: str = "gpt-4-0125-preview"
     suffix: str = ""
     max_tokens: int = 1000
     temperature: float = 0.0
@@ -265,6 +265,7 @@ class OpenAIChatCompletion(OpenAICompletion):
         memory.ai_response = ChatMessage(
             role="assistant", content=response.choices[0].message.content
         )
+        return memory
 
     def stream_call(self, memory: BaseMemory) -> Generator:
         instructions_for_ai = [
