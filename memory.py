@@ -5,13 +5,11 @@ from pydantic import BaseModel
 
 # Define the BaseMemory class
 class BaseMemory(BaseModel):
-    # Purpose is a string that describes the purpose of the robot. It's a system prompt.
-    purpose: str
     # The system prompt is the first message the robot recieves on initialisation, it's a ChatMessage
     # It is populated with the purpose string
     system_prompt: ChatMessage = ChatMessage(role="system", content="purpose")
     # The input model is what goes into your robot
-    input_model: Type[Any] = ChatMessage
+    # input_model: Type[Any] = ChatMessage
     # The instructions for the AI is what will be sent to the AI. Build this in pre-call chain.
     instructions_for_ai: List[ChatMessage] = []
     # List of messages that have been sent / received by the AI
@@ -45,10 +43,6 @@ class BaseMemory(BaseModel):
             self.reset_memory()
 
     def forget_everything(self):
-        """Reset the memory."""
-        self._reset_base_memory_attrs()
-
-    def _reset_base_memory_attrs(self):
         """Reset attributes of the BaseMemory instance."""
         for field_name, field in self.__fields__.items():
             setattr(self, field_name, field.default)
@@ -61,11 +55,3 @@ class BaseMemory(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-
-
-class SimpleChatMemory(BaseMemory):
-    purpose: str = "Chat with a human"
-    input_model: ChatMessage = None
-
-
-# MEMORY MODULE

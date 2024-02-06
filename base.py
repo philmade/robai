@@ -3,57 +3,42 @@ from robai.languagemodels import (
     OpenAIChatCompletion,
     FakeAICompletion,
 )
-from pydantic import ValidationError
-from robai.errors import AIRobotInitializationError, SerializationError
-from robai.memory import BaseMemory, ChatMessage, SimpleChatMemory
+from robai.errors import SerializationError
+from robai.memory import BaseMemory, ChatMessage
 from robai.chains import do_nothing_in_post_call, simply_create_instructions
 from robai.utility import CustomConsole
-from typing import Any, List, Callable, Generator, Self, get_type_hints
-from pydantic import BaseModel
-import inspect
+from typing import List, Callable, Self, TypeVar, Generic
 from loguru import logger
 import asyncio
-import json
 from abc import ABC
 import random
-from rich.console import Console
 from rich.theme import Theme
-from rich.pretty import pprint
-from fastapi import WebSocket
 import traceback
 
+MEMORY = TypeVar("MEMORY")
+AIMODEL = TypeVar("AIMODEL")
 
-class AIRobot(ABC):
+
+class AIRobot(ABC, Generic[MEMORY, AIMODEL]):
     def __init__(
         self,
-        memory: BaseMemory = None,
-        ai_model: BaseAIModel = None,
+        memory: MEMORY,
+        ai_model: AIMODEL,
+        purpose: str = "Chat with a human",
         pre_call_chain: List[Callable] = simply_create_instructions,
         post_call_chain: List[Callable] = do_nothing_in_post_call,
         robots_functions: List[Callable] = None,
         logging_enabled: bool = True,
         test: bool = False,
-        _async: bool = False,
         **kwargs,
     ) -> Self:
+        self.purpose = purpose
         self.logging_enabled = logging_enabled
         self.pre_call_chain = pre_call_chain
         self.post_call_chain = post_call_chain
         self.robots_functions = robots_functions or []
-        if memory is None:
-            self.memory: BaseMemory = SimpleChatMemory(purpose="Chat with a human")
-        else:
-            self.memory: BaseMemory = memory
-        if ai_model is None:
-            self.ai_model: BaseAIModel = OpenAIChatCompletion()
-        elif test:
-            self.ai_model: BaseAIModel = FakeAICompletion()
-        else:
-            self.ai_model: BaseAIModel = ai_model()
-        if self.memory.purpose is None or "":
-            raise AIRobotInitializationError(
-                message="Memory must have a purpose to be used by a robot"
-            )
+        self.memory: MEMORY = memory
+        self.ai_model: AIMODEL = ai_model
         # self.printer = MessagePrinter()
         self.theme = Theme(
             {
@@ -68,9 +53,10 @@ class AIRobot(ABC):
         # SET THE SYSTEM PROMPT - the purpose of the robot in a message format.
         system_prompt = ChatMessage(
             role="system",
-            content=f"You are {self.__class__.__name__}, your purpose is: {self.memory.purpose}",
+            content=f"You are {self.__class__.__name__}, your purpose is: {self.purpose}",
         )
         self.memory.system_prompt = system_prompt
+        self.memory.message_history.append(system_prompt)
         self.color = random.choice(
             ["red", "blue", "green", "yellow", "cyan", "magenta"]
         )
@@ -82,16 +68,24 @@ class AIRobot(ABC):
             self.console.pprint(self.memory)
             self.console.rule("[cyan]Initialization Complete")
 
-    def process(self, input_data: Any, stream: bool = False) -> BaseModel:
-        expected_type = self.memory.__annotations__["input_model"]
-        if not isinstance(input_data, expected_type):
-            raise TypeError(
-                f"Robot received an input of type {type(input_data)}, but it expected an input of type {expected_type}."
+    def system_checks(self):
+        if self.purpose == "Chat with a human":
+            logger.warning(
+                "This is totally default robot. You should set the robot.purpose."
             )
+        if self.pre_call_chain == simply_create_instructions:
+            logger.warning(
+                "This is totally default robot. You should set the robot.pre_call_chain."
+            )
+        if self.post_call_chain == do_nothing_in_post_call:
+            logger.warning(
+                "This is totally default robot. You should set the robot.post_call_chain."
+            )
+
+    def process(self, stream: bool = False) -> MEMORY:
+        self.system_checks()
         if self.logging_enabled:
             self.console.rule("[green]Starting Pre-call Chain")
-        # IMPORTANT STEP - THE INPUT MUST BE ADDED TO THE MEMORY
-        self.memory.input_model = input_data
         # THE USER CAN DO WHATEVER THEY WANT FROM IT FROM THERE
         self.memory.complete = False
         while not self.memory.complete:
@@ -146,12 +140,12 @@ class AIRobot(ABC):
 
         return self.memory
 
-    async def aprocess(self, stream: bool = False) -> BaseModel:
-        # Validate the memory object
-        try:
-            self.memory.model_validate(self.memory)
-        except ValidationError as e:
-            raise ValueError(f"Invalid memory object: {e}")
+    async def aprocess(self, stream: bool = False) -> MEMORY:
+        """
+        Main logic here. This calls all the functions in the pre-call chain, then the AI model, then the post-call chain.
+        All it needs is that after all pre-call functions, self.memory.instructions_for_ai is a set of ChatMessage objects.
+        """
+        self.system_checks()
         if self.logging_enabled:
             self.console.rule("[green]Starting Pre-call Chain")
         # THE USER CAN DO WHATEVER THEY WANT FROM IT FROM THERE
@@ -212,7 +206,7 @@ class AIRobot(ABC):
             if self.logging_enabled:
                 self.console.rule("[white]DONE WITH POST-CALL")
                 self.console.rule("[magenta]Processing Complete - returning memory")
-
+        # VERY IMPORTANT - THE MEMORY IS WHAT IS RETURNED
         return self.memory
 
     def message_history_strings(self) -> str:
