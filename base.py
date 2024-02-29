@@ -51,12 +51,12 @@ class AIRobot(ABC, Generic[MEMORY, AIMODEL]):
             }
         )
         # SET THE SYSTEM PROMPT - the purpose of the robot in a message format.
-        system_prompt = ChatMessage(
-            role="system",
-            content=f"You are {self.__class__.__name__}, your purpose is: {self.purpose}",
-        )
-        self.memory.system_prompt = system_prompt
-        self.memory.message_history.append(system_prompt)
+        # system_prompt = ChatMessage(
+        #     role="system",
+        #     content=f"You are {self.__class__.__name__}, your purpose is: {self.purpose}",
+        # )
+        # self.memory.system_prompt = system_prompt
+        # self.memory.message_history.append(system_prompt)
         self.color = random.choice(
             ["red", "blue", "green", "yellow", "cyan", "magenta"]
         )
