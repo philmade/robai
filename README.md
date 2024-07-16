@@ -1,3 +1,5 @@
+![Alt text](img/robai.png "Your RobAI Agent!")
+
 RobAI Framework
 Welcome to RobAI - your friendly AI robot framework designed to make working with AI intuitive and easy! RobAI streamlines the construction and utilization of AI robots, offering a simple yet powerful paradigm to interact with AI models. Let's dive into the fun and engaging features that make RobAI the perfect companion for your AI development journey.
 
