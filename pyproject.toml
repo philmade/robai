@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "robai"
+version = "0.1.0"
+description = "Building on AI from a personality first perspective. Every way to interact with AI is through a robot that you create. What will you build?"
+authors = ["phil harper <phil@imrge.co>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pydantic = "^1.10.7"
+faker = "^19.3.0"
+loguru = "^0.7.0"
+
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.23.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
