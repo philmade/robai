@@ -10,6 +10,12 @@ python = "^3.11"
 pydantic = "^1.10.7"
 faker = "^19.3.0"
 loguru = "^0.7.0"
+openai = "^1.0.0"
+tiktoken = "^0.5.0"
+fastapi = "^0.100.0"
+websockets = "^11.0.0"
+rich = "^13.0.0"
+starlette = "^0.30.0"
 
 
 [tool.poetry.group.dev.dependencies]
