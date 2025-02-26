@@ -13,7 +13,7 @@ setup(
         "fastapi>=0.100.0",
         "websockets>=11.0.0",
         "rich>=13.0.0",
-        "starlette>=0.30.0",
+        "starlette",
     ],
     # Metadata
     author="philmade",
