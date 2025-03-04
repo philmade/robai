@@ -1,200 +1,222 @@
-RobAI Framework
-RobAI is a lightweight, Pythonic framework for building AI-powered robots. It simplifies integrating AI models (like OpenAI’s GPT) into your applications with a clean, memory-driven workflow: pre-call processing, AI interaction, and post-call handling. Designed by philmade, it’s perfect for creating conversational agents, function-calling bots, or interactive tools—all with minimal fuss.
+# RobAI Framework
 
-Version: 0.1.0
-Source: github.com/philmade/robai
-License: MIT
-Features
-SimpleRobot Base: Extend BaseRobot or ChatRobot to craft custom AI bots with built-in message management.
-Memory Management: PromptManager handles chat history with token and message limits, trimming old messages automatically.
-Function Calling: Use @robot_function to define AI-callable methods, with Pydantic-powered schema validation.
-Streaming Support: Real-time AI responses via OpenAI’s streaming API.
-Cross-Platform I/O: Console, WebSocket, or custom message handlers for flexible input/output.
-Pythonic Design: Intuitive APIs, type hints, and decorators make it feel like pure Python.
-Installation
-Install robai directly from GitHub:
+**RobAI** is a lightweight, Pythonic framework for building AI-powered robots. Created by `philmade`, it streamlines integration of AI models (e.g., OpenAI's GPT) with a memory-driven workflow: prepare input, process AI responses, and handle function calls—all in a clean, extensible way. Ideal for chatbots, interactive tools, or AI-driven apps with minimal setup hassle.
 
-bash
+- **Version**: 0.1.0
+- **Source**: [github.com/philmade/robai](https://github.com/philmade/robai)
+- **License**: MIT
 
-Collapse
+## Features
 
-Wrap
+- **Robot Classes**: Extend `BaseRobot` or `ChatRobot` for custom AI logic.
+- **Memory Handling**: `PromptManager` manages chat history with token/message limits.
+- **Function Calling**: Define AI-callable methods with `@robot_function` and Pydantic schemas.
+- **Streaming**: Real-time AI responses via OpenAI's streaming API.
+- **Flexible I/O**: Console, WebSocket, or custom handlers for input/output.
+- **Pythonic**: Simple APIs, type hints, and decorators keep it intuitive.
 
-Copy
+## Installation
+
+Install `robai` from GitHub:
+
+```bash
 pip install git+https://github.com/philmade/robai.git
-Required dependencies (auto-installed):
+```
 
-pydantic>=1.10.7
-openai>=1.0.0
-tiktoken>=0.5.0
-loguru>=0.7.0
-rich>=13.0.0
-Plus a few others (see setup.py).
-Python 3.11+ is required.
+### Dependencies (auto-installed):
 
-Quick Start
-Here’s a minimal example of a chat robot that echoes your input with an AI twist:
+- pydantic>=1.10.7
+- openai>=1.0.0
+- tiktoken>=0.5.0
+- loguru>=0.7.0
+- rich>=13.0.0
+- Others in setup.py
 
-python
+Requires Python 3.11+.
 
-Collapse
+## Quick Start
 
-Wrap
+Based on example.py, here's how to create a chat bot with function-calling capabilities:
 
-Copy
-from robai.base import BaseRobot
+```python
 from robai.schemas import ChatMessage, SystemMessage
+from robai.chat import ChatRobot
+from robai.protocols import ConsoleMessageHandler
+from robai.func_tools import robot_function
+from pydantic import BaseModel, Field
 
-class EchoBot(BaseRobot):
-    def _init_system_prompt(self):
-        self.system_prompt = SystemMessage(content="Echo back what the user says, but make it fun!")
+# Pydantic model for input
+class HelloWorldInput(BaseModel):
+    message: str = Field(..., description="A message to print")
+
+# Define the bot
+class TestBot(ChatRobot):
+    def __init__(self):
+        super().__init__(message_handler=ConsoleMessageHandler())
+        self.system_prompt = SystemMessage(
+            content="You're a helpful assistant. Use functions to respond when possible."
+        )
+
+    @robot_function()
+    async def hello_world(self, input_data: HelloWorldInput) -> None:
+        """Prints a message to the console"""
+        print(input_data.message)
+        self.function_results.append("hello_world", input_data.message)
 
     async def prepare(self):
-        self.prompt_manager.add_message(self.input_data)
+        message = await self.message_handler.wait_for_input()
+        self.prompt_manager.set_system_prompt(self.system_prompt)
+        self.prompt_manager.add_message(message)
 
     async def process(self):
-        await self.generate_ai_response()
         await self._handle_streaming_response()
-        self.output_data = self.output_data  # Streamed response is set here
+        if self.pending_function_calls:
+            await self._add_function_results_to_context()
+            self.prompt_manager.add_message(
+                SystemMessage(content="Respond to the function results.")
+            )
+            await self.generate_ai_response()
+            await self._handle_streaming_response()
 
     async def stop_condition(self):
         return self.finished
 
 # Run it
-async def main():
-    bot = EchoBot()
-    await bot.load(ChatMessage(content="Hello!"))
-    await bot.interact()
-    print(bot.output_data.content)
-
 import asyncio
+async def main():
+    bot = TestBot()
+    await bot.interact()
 asyncio.run(main())
-Set your OpenAI API key first:
+```
 
-bash
+Set your OpenAI API key:
 
-Collapse
-
-Wrap
-
-Copy
+```bash
 export OPENAI_API_KEY="your-key-here"
-Run it, and it’ll echo “Hello!” with some AI flair (e.g., “Hey there, Hello! What a blast!”).
+```
 
-Directory Structure
-text
+Run it, type "Say hi", and the AI might call hello_world to print "hi" while explaining the action.
 
-Collapse
+## Directory Structure
 
-Wrap
-
-Copy
+```
 robai/
-├── __init__.py     # Exports core classes and utilities
-├── base.py         # BaseRobot, BaseAI, and PromptManager
-├── chat.py         # ChatRobot for conversational bots
+├── __init__.py     # Core exports
+├── base.py         # BaseRobot, BaseAI, PromptManager
+├── chat.py         # ChatRobot for chat-based bots
 ├── errors.py       # Custom exceptions
-├── func_tools.py   # Decorators for function control
-├── protocols.py    # MessageHandler for I/O
-├── schemas.py      # Pydantic models for messages and events
-├── tools.py        # ToolSet for function management
-├── utility.py      # Logging and helper functions
+├── example.py      # Demo bot with functions
+├── func_tools.py   # Function decorators
+├── protocols.py    # Message handlers
+├── schemas.py      # Pydantic models
+├── tools.py        # Tool management
+├── utility.py      # Helpers and logging
 └── setup.py        # Package setup
-Key Components
-BaseRobot
-The heart of robai. Subclass it to define your bot’s behavior:
+```
 
-prepare(): Set up input and prompts.
-process(): Handle AI responses (streaming or non-streaming).
-stop_condition(): When to halt (customize this!).
-Functions: Mark methods with @robot_function for AI to call.
-PromptManager
-Manages chat history:
+## Key Components
 
-Keeps system messages (e.g., “You’re a helpful bot”).
-Trims old messages based on max_messages (default 50) or max_tokens (default 4000).
-MessageHandler
-Handles I/O:
+### TestBot (from example.py)
+- **Init**: Sets a system prompt and uses ConsoleMessageHandler
+- **Functions**:
+  - hello_world: Prints a message
+  - add_numbers: Adds two numbers
+  - process_array: Joins a list of strings
+  - process_complex: Handles nested objects
+  - exit_conversation: Stops the bot
+- **Flow**: Takes input, calls functions if prompted, and responds with results
 
-ConsoleMessageHandler: Prints to terminal (great for testing).
-WebSocketMessageHandler: Streams to WebSocket clients.
-Extend it for custom needs (e.g., GUI integration).
-Example with GUI (BeeWare)
-Integrate with Toga for a test window:
+### BaseRobot
+- prepare(): Sets up prompts and input
+- process(): Handles AI responses and function calls
+- stop_condition(): Defines when to stop (e.g., after one response)
 
-python
+### PromptManager
+- Manages chat history with max_messages (50) and max_tokens (4000)
 
-Collapse
+### MessageHandler
+- ConsoleMessageHandler: Terminal I/O with rich formatting
 
-Wrap
+## Usage Example
 
-Copy
-import toga
-from toga.style import Pack, COLUMN
-from robai.base import BaseRobot
-from robai.schemas import ChatMessage, SystemMessage
+Try the full TestBot from example.py:
 
-class AIRobot(BaseRobot):
-    def _init_system_prompt(self):
-        self.system_prompt = SystemMessage(content="You’re a friendly AI!")
+```python
+from robai.schemas import ChatMessage, SystemMessage, AIMessage
+from robai.chat import ChatRobot
+from robai.protocols import ConsoleMessageHandler
+from robai.func_tools import robot_function
+from pydantic import BaseModel, Field
+
+class AddNumbersInput(BaseModel):
+    a: int = Field(..., description="First number")
+    b: int = Field(..., description="Second number")
+
+class TestBot(ChatRobot):
+    def __init__(self):
+        super().__init__(message_handler=ConsoleMessageHandler())
+        self.system_prompt = SystemMessage(
+            content="You're a helpful assistant. Use functions when asked."
+        )
+
+    @robot_function()
+    async def add_numbers(self, data: AddNumbersInput) -> None:
+        """Add two numbers"""
+        result = data.a + data.b
+        self.function_results.append("add_numbers", f"Result: {result}")
 
     async def prepare(self):
-        self.prompt_manager.add_message(self.input_data)
+        message = await self.message_handler.wait_for_input()
+        self.prompt_manager.set_system_prompt(self.system_prompt)
+        self.prompt_manager.add_message(message)
 
     async def process(self):
-        await self.generate_ai_response()
         await self._handle_streaming_response()
+        if self.pending_function_calls:
+            await self._add_function_results_to_context()
+            self.prompt_manager.add_message(
+                SystemMessage(content="Tell the user what happened.")
+            )
+            await self.generate_ai_response()
+            await self._handle_streaming_response()
 
     async def stop_condition(self):
-        return True  # One-shot response
+        return self.finished
 
-def build(app):
-    box = toga.Box(style=Pack(direction=COLUMN, padding=10))
-    input_field = toga.TextInput(placeholder="Ask me anything!", style=Pack(padding=5))
-    response_label = toga.Label("Response: (waiting)", style=Pack(padding=5))
+import asyncio
+async def main():
+    bot = TestBot()
+    await bot.interact()
+asyncio.run(main())
+```
 
-    async def process_input(widget):
-        text = input_field.value
-        if text:
-            bot = AIRobot()
-            await bot.load(ChatMessage(content=text))
-            await bot.interact()
-            response_label.text = f"Response: {bot.output_data.content}"
-            input_field.value = ""
+Type "Add 3 and 5", and it'll call add_numbers, print "Result: 8", and explain the process.
 
-    button = toga.Button("Submit", on_press=process_input, style=Pack(padding=5))
-    box.add(input_field)
-    box.add(button)
-    box.add(response_label)
-    return box
+## Usage Tips
 
-def main():
-    return toga.App("AI App", "org.example.ai", startup=build)
+### Functions
+Use `@robot_function` with Pydantic models for structured input:
 
-if __name__ == "__main__":
-    main().main_loop()
-Run with briefcase dev—type, click, and see the AI respond in the window!
-
-Usage Tips
-Streaming: Set stream=True in BaseRobot for real-time responses.
-Functions: Use @robot_function to let the AI call your methods:
-python
-
-Collapse
-
-Wrap
-
-Copy
+```python
 @robot_function()
-async def say_hello(self, name: str):
-    return f"Hello, {name}!"
-Testing: Call interact(test=True) for an interactive console mode.
-Requirements
-An OpenAI API key (set via OPENAI_API_KEY).
-Python 3.11+.
-Dependencies listed in setup.py.
-Contributing
-Fork github.com/philmade/robai, tweak, and PR! Issues and feature requests are welcome.
+async def say_hi(self, input: HelloWorldInput):
+    return f"Hi, {input.message}!"
+```
 
-Why RobAI?
-It’s lightweight, flexible, and feels like Python—none of that “dependency hell” nonsense. Pair it with a GUI like Toga, and you’ve got a clean, AI-driven app in minutes. Perfect for your test window dreams!
+### Additional Features
+- **Streaming**: Enable with stream=True in ChatRobot
+- **Exit**: Say "exit" to trigger exit_conversation
+
+## Requirements
+
+- OpenAI API key (OPENAI_API_KEY)
+- Python 3.11+
+- Dependencies from setup.py
+
+## Contributing
+
+Fork [github.com/philmade/robai](https://github.com/philmade/robai), make changes, and submit a PR. Issues welcome!
+
+## Why RobAI?
+
+It's simple, extensible, and avoids build nightmares. Pair it with a GUI (e.g., BeeWare's Toga) for a slick AI app in no time!
