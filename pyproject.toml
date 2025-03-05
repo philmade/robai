@@ -6,7 +6,7 @@ authors = ["phil harper <phil@imrge.co>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.8"
 pydantic = "^1.10.7"
 faker = "^19.3.0"
 loguru = "^0.7.0"
