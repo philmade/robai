@@ -13,7 +13,7 @@ from typing import (
     Optional,
     Literal,
 )
-
+import uuid
 from openai import AsyncOpenAI
 import openai
 from openai.types.chat.chat_completion import ChatCompletion
@@ -691,9 +691,12 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
     # UTILITY FUNCTIONS FOR CHILD CLASSES
     async def _handle_non_streaming_response(self) -> None:
         """Process a non-streaming AI response."""
-        await self.message_handler.send_new_message()
-        await self.message_handler.send_chunk(self.output_data.content)
-        await self.message_handler.send_message_complete()
+        current_message_id = uuid.uuid4()
+        await self.message_handler.send_new_message(self.robot_name, current_message_id)
+        await self.message_handler.send_chunk(
+            self.output_data.content, current_message_id
+        )
+        await self.message_handler.send_message_complete(current_message_id)
 
     async def _handle_streaming_response(self) -> None:
         """Process a streaming AI response."""
@@ -708,17 +711,20 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         self.pending_function_calls = []
 
         try:
-            await self.message_handler.send_new_message()
+            current_message_id = uuid.uuid4()
+            await self.message_handler.send_new_message(
+                self.robot_name, current_message_id
+            )
             async for chunk in self.output_data:
                 chunk: ChatCompletionChunk
-                await self._process_chunk(chunk)
+                await self._process_chunk(chunk, current_message_id)
                 # We'll still finalize on tool_calls/stop in case it helps
                 if chunk.choices[0].finish_reason in ["tool_calls", "stop"]:
                     await self._finalize_current_function()
 
             # Always finalize after the loop, regardless of finish_reason
             await self._finalize_current_function()
-            await self.message_handler.send_message_complete()
+            await self.message_handler.send_message_complete(current_message_id)
         except Exception as e:
             await self.message_handler.send_error(str(e))
             await self.log(f"Error in streaming response: {e}", level="error")
@@ -729,14 +735,14 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                 role="assistant", content=self._accumulated_message
             )
 
-    async def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
+    async def _process_chunk(self, chunk: ChatCompletionChunk, message_id: str) -> None:
         """Process individual chunks from the AI response stream."""
         delta = chunk.choices[0].delta
 
         # Handle content chunks
         if delta.content:
             self._accumulated_message += delta.content
-            await self.message_handler.send_chunk(delta.content)
+            await self.message_handler.send_chunk(delta.content, message_id)
 
         # Handle tool call chunks
         if delta.tool_calls:

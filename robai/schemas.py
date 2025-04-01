@@ -12,19 +12,19 @@ class TokenBaseModel(BaseModel):
 
 class ChatMessage(TokenBaseModel):
     role: str = "user"
-    robot: str = "case.bot"
+    name: str = "case.bot"
     content: str = "Hello, I am a user"
 
 
 class AIMessage(TokenBaseModel):
-    role: str = "ai"
-    robot: str = "case.bot"
+    role: str = "assistant"
+    name: str = "case.bot"
     content: str = "Hello, I am an AI"
 
 
 class SystemMessage(TokenBaseModel):
     role: str = "system"
-    robot: str = "case.bot"
+    name: str = "case.bot"
     content: str = "Hello, I am a system message"
 
 
@@ -39,8 +39,8 @@ class NewMessageEvent(RobaiEvent):
     event: str = "newMessage"
 
     class Data(BaseModel):
-        robot_name: str  # The name of who is speaking (e.g. 'Assistant', 'User', 'Research Bot', etc)
-        content: Optional[str] = None
+        name: str  # The name of who is speaking (e.g. 'Assistant', 'User', 'Research Bot', etc)
+        message_id: str
 
     data: Data
 
@@ -48,9 +48,19 @@ class NewMessageEvent(RobaiEvent):
 class MessageCompleteEvent(RobaiEvent):
     event: str = "messageComplete"
 
+    class Data(BaseModel):
+        message_id: str
+
+    data: Data
+
 
 class MessageChunkEvent(RobaiEvent):
     event: str = "newMessageChunk"
+
+    class Data(BaseModel):
+        message_id: str
+        content: str
+
     data: str
 
 

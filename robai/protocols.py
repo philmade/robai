@@ -72,15 +72,15 @@ class MessageHandler(ABC):
         """Get input from the source"""
         raise NotImplementedError
 
-    async def send_new_message(self) -> None:
+    async def send_new_message(self, name: str, message_id: str) -> None:
         """Signal start of new message from this robot"""
         raise NotImplementedError
 
-    async def send_chunk(self, content: str) -> None:
+    async def send_chunk(self, content: str, message_id: str) -> None:
         """Send a chunk of message content (for streaming)"""
         raise NotImplementedError
 
-    async def send_message_complete(self) -> None:
+    async def send_message_complete(self, message_id: str) -> None:
         """Signal that the message is complete"""
         raise NotImplementedError
 
@@ -153,13 +153,13 @@ class ConsoleMessageHandler(MessageHandler):
         self._is_streaming = False
         self.width = shutil.get_terminal_size().columns - 2
 
-    async def send_new_message(self) -> None:
+    async def send_new_message(self, name: str, message_id: str) -> None:
         """Start a new message."""
         self._is_streaming = True
         self._current_message = ""
-        print("\n🤖 Assistant:", end=" ", flush=True)
+        print(f"\n🤖 {name}: {message_id}", end=" ", flush=True)
 
-    async def send_chunk(self, chunk: str) -> None:
+    async def send_chunk(self, chunk: str, message_id) -> None:
         """Use simple print for streaming chunks"""
         try:
             self._current_message += chunk
@@ -168,7 +168,7 @@ class ConsoleMessageHandler(MessageHandler):
             logger.error(f"Error in send_chunk: {e}")
             print(chunk, end="", flush=True)
 
-    async def send_message_complete(self) -> None:
+    async def send_message_complete(self, message_id: str) -> None:
         """Complete the message with a single newline"""
         self._is_streaming = False
         print()  # Simple newline
@@ -308,26 +308,36 @@ class WebSocketMessageHandler(MessageHandler):
                 ).model_dump_json()
             )
 
-    async def send_new_message(self) -> None:
+    async def send_new_message(self, name: str, message_id: str) -> None:
         """Signal start of new message to frontend using this robot's name"""
         async with self.event_lock:
             await self.websocket.send_text(
                 NewMessageEvent(
-                    data=NewMessageEvent.Data(robot_name=self.robot_name)
+                    data=NewMessageEvent.Data(
+                        name=self.robot_name, message_id=message_id
+                    )
                 ).model_dump_json()
             )
 
-    async def send_chunk(self, content: str) -> None:
+    async def send_chunk(self, content: str, message_id: str) -> None:
         """Stream message chunk to frontend"""
         async with self.event_lock:
             await self.websocket.send_text(
-                MessageChunkEvent(data=content).model_dump_json()
+                MessageChunkEvent(
+                    data=MessageChunkEvent.Data(
+                        content=content, message_id=message_id
+                    ).model_dump_json()
+                )
             )
 
-    async def send_message_complete(self) -> None:
+    async def send_message_complete(self, message_id: str) -> None:
         """Signal message completion to frontend"""
         async with self.event_lock:
-            await self.websocket.send_text(MessageCompleteEvent().model_dump_json())
+            await self.websocket.send_text(
+                MessageCompleteEvent(
+                    data=MessageCompleteEvent.Data(message_id=message_id)
+                ).model_dump_json()
+            )
 
     async def send_error(self, error: str) -> None:
         """Send error event to frontend"""
