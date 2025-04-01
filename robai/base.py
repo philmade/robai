@@ -691,7 +691,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
     # UTILITY FUNCTIONS FOR CHILD CLASSES
     async def _handle_non_streaming_response(self) -> None:
         """Process a non-streaming AI response."""
-        current_message_id = uuid.uuid4()
+        current_message_id = str(uuid.uuid4())
         await self.message_handler.send_new_message(self.robot_name, current_message_id)
         await self.message_handler.send_chunk(
             self.output_data.content, current_message_id
@@ -711,7 +711,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         self.pending_function_calls = []
 
         try:
-            current_message_id = uuid.uuid4()
+            current_message_id = str(uuid.uuid4())
             await self.message_handler.send_new_message(
                 self.robot_name, current_message_id
             )
