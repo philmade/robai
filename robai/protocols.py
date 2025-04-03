@@ -72,7 +72,7 @@ class MessageHandler(ABC):
         """Get input from the source"""
         raise NotImplementedError
 
-    async def send_new_message(self, name: str, message_id: str) -> None:
+    async def send_new_message(self, role: str, name: str, message_id: str) -> None:
         """Signal start of new message from this robot"""
         raise NotImplementedError
 
@@ -153,11 +153,11 @@ class ConsoleMessageHandler(MessageHandler):
         self._is_streaming = False
         self.width = shutil.get_terminal_size().columns - 2
 
-    async def send_new_message(self, name: str, message_id: str) -> None:
+    async def send_new_message(self, role: str, name: str, message_id: str) -> None:
         """Start a new message."""
         self._is_streaming = True
         self._current_message = ""
-        print(f"\n🤖 {name}: {message_id}", end=" ", flush=True)
+        print(f"\n{role}: {name}: {message_id}", end=" ", flush=True)
 
     async def send_chunk(self, chunk: str, message_id) -> None:
         """Use simple print for streaming chunks"""
@@ -308,13 +308,13 @@ class WebSocketMessageHandler(MessageHandler):
                 ).model_dump_json()
             )
 
-    async def send_new_message(self, name: str, message_id: str) -> None:
+    async def send_new_message(self, role: str, name: str, message_id: str) -> None:
         """Signal start of new message to frontend using this robot's name"""
         async with self.event_lock:
             await self.websocket.send_text(
                 NewMessageEvent(
                     data=NewMessageEvent.Data(
-                        name=self.robot_name, message_id=message_id
+                        role=role, name=name, message_id=message_id
                     )
                 ).model_dump_json()
             )

@@ -37,20 +37,17 @@ class RobaiEvent(BaseModel):
 # Define specific events with the nested data models
 class NewMessageEvent(RobaiEvent):
     event: str = "newMessage"
-
     class Data(BaseModel):
+        role: str = "robot"
         name: str  # The name of who is speaking (e.g. 'Assistant', 'User', 'Research Bot', etc)
         message_id: str
-
     data: Data
 
 
 class MessageCompleteEvent(RobaiEvent):
     event: str = "messageComplete"
-
     class Data(BaseModel):
         message_id: str
-
     data: Data
 
 
@@ -60,8 +57,7 @@ class MessageChunkEvent(RobaiEvent):
     class Data(BaseModel):
         message_id: str
         content: str
-
-    data: str
+    data: Data
 
 
 class RobotStatusUpdateEvent(RobaiEvent):

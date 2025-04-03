@@ -713,7 +713,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         try:
             current_message_id = str(uuid.uuid4())
             await self.message_handler.send_new_message(
-                self.robot_name, current_message_id
+                'assistant', self.robot_name, current_message_id
             )
             async for chunk in self.output_data:
                 chunk: ChatCompletionChunk
