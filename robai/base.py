@@ -953,7 +953,6 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                     method = getattr(self, function_name)
                     await method(**parsed_arguments)
                 except Exception as e:
-                    error_info = traceback.extract_tb(e.__traceback__)[-1]
                     error_message = (
                         f"Error in function '{function_name}' (ID: {call_id}): {str(e)}"
                     )
@@ -1029,7 +1028,6 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         self._accumulated_message = ""
         self._current_function = None
         self.pending_function_calls = []
-        stream_started = False
         internal_message_to_add: Optional[AIMessage] = (
             None  # Store message to add to history at the end
         )
@@ -1043,8 +1041,6 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                 chat_id=self.chat_id or UUID("00000000-0000-0000-0000-000000000000"),
             )
             await self.message_handler.stream_start(start_payload)
-            stream_started = True
-            logger.debug(f"Stream started for run {self.interaction_id}")
 
             # 2. Process chunks
             if not isinstance(self.output_data, openai.AsyncStream):
