@@ -13,7 +13,7 @@ from typing import (
     Optional,
     Literal,
 )
-import uuid
+from uuid import UUID
 from openai import AsyncOpenAI
 import openai
 from openai.types.chat.chat_completion import ChatCompletion
@@ -25,6 +25,12 @@ from robai.schemas import (
     AIMessage,
     SystemMessage,
     MarkdownFunctionResults,
+    RobotStatusUpdatePayload,
+    ErrorPayload,
+    RobaiChatMessagePayload,
+    StreamStartPayload,
+    StreamEndPayload,
+    StreamChunkPayload,
 )
 from starlette.websockets import WebSocketDisconnect
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
@@ -52,9 +58,8 @@ import time
 from dataclasses import dataclass
 import tiktoken
 import inspect
-from datetime import datetime
-import sys
-import logging
+from datetime import datetime, timezone
+import uuid as uuid_pkg
 
 InputType = TypeVar("InputType")
 OutputType = TypeVar("OutputType")
@@ -203,6 +208,8 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         max_tokens: int = 100,
         log_level: str = "WARNING",
         owns_message_handler: bool = True,
+        interaction_id: Optional[str] = None,
+        chat_id: Optional[UUID] = None,
         **kwargs,
     ) -> Self:
         """Initialize the robot.
@@ -216,15 +223,23 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             owns_message_handler: Whether this robot owns and should manage the message handler lifecycle
         """
         configure_logger(log_level)
+        self.robot_id: str = self.__class__.__name__
         self.robot_name: str = self.__class__.__name__
+        self.robot_id = kwargs.get("robot_id", self.robot_id)
+        self.robot_name = kwargs.get("robot_name", self.robot_name)
         self.message_handler = message_handler
-        # Register this robot with the message handler
         self.message_handler.set_current_robot(self)
         self.owns_message_handler = owns_message_handler
 
         self.input_data: InputType = None
         self.output_data: OutputType = None
         self.stream = stream
+        self.finished: bool = False
+
+        # Chat and Interaction IDs
+        # these may need to get set more granularly during a single call or interact() session
+        self.interaction_id: str = interaction_id or str(uuid_pkg.uuid4())
+        self.chat_id: Optional[UUID] = chat_id
 
         # Initialize AI
         self.ai_class = BaseAI(
@@ -241,7 +256,6 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         )
         self.system_prompt: Optional[SystemMessage] = None
         self._init_system_prompt()  # Initialize system prompt
-        self.finished: bool = False
 
         # Function management - collect all robot functions including inherited ones
         self.all_functions = {}
@@ -261,7 +275,6 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         self.force_function: Optional[str] = None
         self.function_results: MarkdownFunctionResults = MarkdownFunctionResults()
         self.skip_call: bool = False
-        self.finished: bool = False
         # State management
         self._accumulated_message = ""
         self._current_function = None
@@ -399,20 +412,46 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             level: The type of log message
             variables: Optional dict of variables to display in state view
         """
-        if not hasattr(self, "websocket"):
-            return
+        if self.message_handler:
+            # Construct a status payload
+            status_payload = RobotStatusUpdatePayload(
+                interaction_id=self.interaction_id,
+                robot_id=self.robot_id,
+                robot_name=self.robot_name,
+                chat_id=self.chat_id
+                or UUID(
+                    "00000000-0000-0000-0000-000000000000"
+                ),  # Use real chat_id or dummy
+                status=f"[{level.upper()}] {message}",
+                # Add variables to status or create separate log event?
+                # For now, include in status message if simple
+                is_complete=(
+                    level == "output"
+                ),  # Mark as complete if it's the final output log?
+            )
+            if variables:
+                try:
+                    status_payload.status += f" | Vars: {json.dumps(variables)}"
+                except TypeError:
+                    status_payload.status += " | Vars: [non-serializable]"
 
-        log_data = {
-            "event": "internalState",
-            "data": {
-                "message": message,
-                "level": level,
-                "variables": variables or {},
-                "robot_name": self.__class__.__name__,
-            },
-        }
-
-        logger.info(json.dumps(log_data))
+            # Use try-except block for handler call
+            try:
+                await self.message_handler.update_status(status_payload)
+            except Exception as e:
+                logger.error(f"Failed to send log/status via message handler: {e}")
+        else:
+            log_level_map = {
+                "input": "INFO",
+                "thinking": "DEBUG",
+                "output": "INFO",
+                "state": "DEBUG",
+                "error": "ERROR",
+            }
+            logger.log(
+                log_level_map.get(level, "INFO"),
+                f"{self.robot_name} ({self.robot_id}): {message}",
+            )  # Include ID in log
 
     async def _interactive_generate(self, *args, **kwargs):
         """Interactive version of generate_response for testing - simulates AI responses"""
@@ -606,58 +645,85 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             return empty_generator()
 
     async def interact(self, test: bool = False) -> OutputType:
-        """Main interaction loop for the robot. Set test=True for interactive testing mode."""
+        """Main interaction loop. Assumes setup_interaction was called first."""
+        if not self.interaction_id:
+            await self.setup_interaction(str(uuid_pkg.uuid4()), None)
+            logger.warning(
+                "interact() called without prior setup_interaction(). Generated fallback interaction ID."
+            )
+
+        # --- Testing mode setup --- (Remains the same)
         if test:
-            # Store original handlers and generators
             self.testing = True
             original_handler = self.message_handler
             original_generate = self.ai_class.generate_response
-
-            # Ensure we're using the console handler for testing
             if not isinstance(self.message_handler, ConsoleMessageHandler):
                 self.message_handler = ConsoleMessageHandler()
-                self.message_handler.robot_name = self.robot_name
+                # Ensure handler knows about the robot context
+                self.message_handler.set_current_robot(self)
                 self.ai_class.message_handler = self.message_handler
-
-            # Replace generate_response with interactive version
             self.ai_class.generate_response = self._interactive_generate
+        # --------------------------
 
         try:
-            await self.connect()
+            await (
+                self.connect()
+            )  # Should this also be part of setup? Maybe not if handler specific.
             await self.prepare()
 
             if not self.prompt_manager.all_messages:
-                raise ValueError(
-                    "Prompt not set - you must set a prompt in prepare() or the AI does nothing"
-                )
+                raise ValueError("Prompt not set - you must set a prompt in prepare()")
 
             if not self.skip_call:
-                await self.generate_ai_response()
+                await self.generate_ai_response()  # Uses new handler methods indirectly
 
-            await self.log("Output: {self.output_data}", level="output")
+            # Output logging now handled by process or specific handler calls
+            # await self.log(...) # Removed direct log call here
+
+            # Process uses updated handler methods
             await self.process()
 
             if await self.stop_condition():
                 result = await self.finalize()
+                # --- Testing mode teardown --- (Remains the same)
                 if test:
-                    # Restore original handlers
                     self.message_handler = original_handler
                     self.ai_class.generate_response = original_generate
+                # ---------------------------
                 return result
 
+            # Recursive call continues the SAME interaction/run ID by default
             return await self.interact(test=test)
 
         except (WebSocketDisconnect, ConnectionClosedOK, ConnectionClosedError) as e:
-            await self.log(f"WebSocket disconnected: {e}", level="state")
+            # Log error using self.log which uses handler.update_status or handler.send_error
+            await self.log(f"WebSocket disconnected: {e}", level="error")
             raise
         except Exception as e:
-            await self.log(f"Exception occurred: {e}\n{format_exc()}", level="error")
+            # Log error and send explicit error via handler
+            error_msg = f"Exception in interact loop: {e}"
+            logger.exception(error_msg, exc_info=True)  # Log full traceback
+            # await self.log(error_msg, level="error") # Log method sends status/error
+            if self.message_handler:
+                try:
+                    error_payload = ErrorPayload(
+                        interaction_id=self.interaction_id,
+                        message=f"Robot execution failed: {e}",
+                        code="ROBOT_EXECUTION_ERROR",
+                        context={"traceback": format_exc()},  # Add traceback
+                    )
+                    await self.message_handler.send_error(error_payload)
+                except Exception as handler_err:
+                    logger.error(
+                        f"Failed to send error via message handler during interact exception: {handler_err}"
+                    )
             raise
         finally:
+            # --- Testing mode teardown --- (Remains the same, ensure it runs)
             if test:
-                # Ensure we restore original handlers even if there's an error
                 self.message_handler = original_handler
                 self.ai_class.generate_response = original_generate
+            # ---------------------------
 
     async def generate_ai_response(self):
         """Get response from AI using available functions from toolsets"""
@@ -668,72 +734,137 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             # Otherwise, use the available functions
             functions_to_pass_to_ai = self.available_functions
 
-        if self.ai_class.stream:
-            self.output_data = await self.ai_class.generate_response(
-                self.prompt_manager.all_messages,
-                functions_to_pass_to_ai,
-                self.force_function,
-            )
+        # Call BaseAI's generate_response
+        response_data = await self.ai_class.generate_response(
+            self.prompt_manager.all_messages,
+            functions_to_pass_to_ai,
+            self.force_function,
+        )
 
+        if self.stream:
+            # response_data is AsyncGenerator[ChatCompletionChunk, None]
+            self.output_data = response_data  # Store generator
         else:
-            output_data, function_calls = await self.ai_class.generate_response(
-                self.prompt_manager.all_messages,
-                functions_to_pass_to_ai,
-                self.force_function,
+            # response_data is Tuple[str, Optional[List[Any]]]
+            output_content, function_calls = response_data
+            # Store AIMessage internally, handler methods will use it later
+            self.output_data = AIMessage(
+                role="assistant",
+                content=output_content,
+                name=self.robot_name,  # Use robot's name
+                robot_id=self.robot_id,
+                interaction_id=self.interaction_id,
+                chat_id=self.chat_id,
             )
-            output_data = output_data if output_data else ""
-            self.output_data = AIMessage(role="assistant", content=output_data)
-            self.pending_function_calls = function_calls
+            self.pending_function_calls = function_calls or []  # Ensure list
 
-        # IMPORTANT - reset the restricted functions to empty or we'll get stuck in a loop
+        # IMPORTANT - reset restricted functions *after* getting the response
         self.restricted_functions = {}
 
     # UTILITY FUNCTIONS FOR CHILD CLASSES
     async def _handle_non_streaming_response(self) -> None:
-        """Process a non-streaming AI response."""
-        current_message_id = str(uuid.uuid4())
-        await self.message_handler.send_new_message(self.robot_name, current_message_id)
-        await self.message_handler.send_chunk(
-            self.output_data.content, current_message_id
+        """Process a non-streaming AI response, ensure self.output_data is AIMessage, and use handler."""
+        final_ai_message: Optional[AIMessage] = None
+
+        # 1. Check the initial output_data type
+        if isinstance(self.output_data, str):
+            # If it's a string, wrap it in an AIMessage
+            logger.debug("Wrapping string output_data in AIMessage for non-streaming.")
+            final_ai_message = AIMessage(
+                role="assistant",
+                content=self.output_data,
+                name=self.robot_name,
+                robot_id=self.robot_id,
+                interaction_id=self.interaction_id,
+                chat_id=self.chat_id,
+            )
+            # Update self.output_data to the AIMessage object
+            self.output_data = final_ai_message
+
+        elif isinstance(self.output_data, AIMessage):
+            # If it's already an AIMessage, use it directly
+            logger.debug("Using existing AIMessage output_data for non-streaming.")
+            final_ai_message = self.output_data
+        else:
+            # If it's neither string nor AIMessage, log error and try to send error payload
+            logger.error(
+                f"_handle_non_streaming_response called with unexpected output_data type: {type(self.output_data)}. Cannot process."
+            )
+            if self.message_handler:
+                try:
+                    error_payload = ErrorPayload(
+                        interaction_id=self.interaction_id,
+                        message="Internal error: Invalid non-streaming output format generated by AI.",
+                        code="INTERNAL_OUTPUT_ERROR",
+                    )
+                    await self.message_handler.send_error(error_payload)
+                except Exception as handler_err:
+                    logger.error(
+                        f"Failed to send output format error via message handler: {handler_err}"
+                    )
+            # Set self.output_data to None to signify failure
+            self.output_data = None
+            return  # Exit if format is invalid
+
+        # 2. Ensure we have a valid AIMessage and content
+        if not final_ai_message:
+            logger.error(
+                "Failed to create or retrieve AIMessage in _handle_non_streaming_response."
+            )
+            self.output_data = None  # Ensure output_data reflects failure
+            return
+
+        content_to_send = final_ai_message.content
+        if content_to_send is None:
+            logger.warning(
+                f"Non-streaming response content is None for run {self.interaction_id}. Sending empty message."
+            )
+            content_to_send = ""  # Use empty string
+            # Update the message object itself if needed for history
+            final_ai_message.content = content_to_send
+
+        # 3. Send the full message via the handler
+        # Create RobaiChatMessagePayload from the final AIMessage
+        payload = RobaiChatMessagePayload(
+            message_id=str(uuid_pkg.uuid4()),  # Generate ID
+            interaction_id=self.interaction_id,
+            chat_id=self.chat_id or UUID("00000000-0000-0000-0000-000000000000"),
+            robot_id=self.robot_id,
+            robot_name=self.robot_name,
+            content=content_to_send,
+            role="assistant",
+            timestamp=datetime.now(timezone.utc),
+            metadata=final_ai_message.metadata,  # Include metadata if any
         )
-        await self.message_handler.send_message_complete(current_message_id)
-
-    async def _handle_streaming_response(self) -> None:
-        """Process a streaming AI response."""
-        await self._stream_response_and_gather_functions()
-        if self.pending_function_calls:
-            await self._execute_function_calls()
-
-    async def _stream_response_and_gather_functions(self) -> None:
-        """Process a streaming AI response, accumulating the streamed message and function calls."""
-        self._accumulated_message = ""
-        self._current_function = None
-        self.pending_function_calls = []
-
         try:
-            current_message_id = str(uuid.uuid4())
-            await self.message_handler.send_new_message(
-                'assistant', self.robot_name, current_message_id
-            )
-            async for chunk in self.output_data:
-                chunk: ChatCompletionChunk
-                await self._process_chunk(chunk, current_message_id)
-                # We'll still finalize on tool_calls/stop in case it helps
-                if chunk.choices[0].finish_reason in ["tool_calls", "stop"]:
-                    await self._finalize_current_function()
+            if self.message_handler:
+                await self.message_handler.send_full_message(payload)
+                # Add the final AIMessage to internal history
+                self.add_message(final_ai_message)
+                self.add_action_to_history("✅ Full Message Sent")
+            else:
+                logger.warning(
+                    "No message handler available to send non-streaming response."
+                )
+                # Still add to history even if not sent?
+                self.add_message(final_ai_message)
+                self.add_action_to_history("✅ Message Generated (No Handler)")
 
-            # Always finalize after the loop, regardless of finish_reason
-            await self._finalize_current_function()
-            await self.message_handler.send_message_complete(current_message_id)
         except Exception as e:
-            await self.message_handler.send_error(str(e))
-            await self.log(f"Error in streaming response: {e}", level="error")
-            raise
-
-        if self._accumulated_message:
-            self.output_data = ChatMessage(
-                role="assistant", content=self._accumulated_message
-            )
+            logger.exception(f"Error sending non-streaming message via handler: {e}")
+            self.add_action_to_history("❌ Error Sending Message", details=str(e))
+            # Error already logged, output_data remains the AIMessage but sending failed
+            if self.message_handler:
+                try:
+                    # Send a specific error about the sending failure
+                    error_payload = ErrorPayload(
+                        interaction_id=self.interaction_id,
+                        message=f"Failed to send generated message via handler: {e}",
+                        code="HANDLER_SEND_ERROR",
+                    )
+                    await self.message_handler.send_error(error_payload)
+                except Exception:
+                    pass  # Avoid error loops
 
     async def _process_chunk(self, chunk: ChatCompletionChunk, message_id: str) -> None:
         """Process individual chunks from the AI response stream."""
@@ -742,7 +873,13 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         # Handle content chunks
         if delta.content:
             self._accumulated_message += delta.content
-            await self.message_handler.send_chunk(delta.content, message_id)
+            await self.message_handler.stream_chunk(
+                StreamChunkPayload(
+                    interaction_id=self.interaction_id,
+                    content=delta.content,
+                    message_id=message_id,
+                )
+            )
 
         # Handle tool call chunks
         if delta.tool_calls:
@@ -759,7 +896,10 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             self._current_function = {"name": "", "arguments": ""}
             if function_delta.name:
                 await self.message_handler.update_status(
-                    f"Calling {function_delta.name}"
+                    payload=RobotStatusUpdatePayload(
+                        interaction_id=self.interaction_id,
+                        status=f"Calling {function_delta.name}",
+                    )
                 )
 
         # Accumulate function name
@@ -788,22 +928,21 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         if not self.pending_function_calls:
             return
 
-        for function_call in self.pending_function_calls:
-            function_name = (
-                function_call.name
-                if isinstance(function_call, ChoiceDeltaToolCallFunction)
-                else function_call.function.name
-            )
-            function_arguments = (
-                function_call.arguments
-                if isinstance(function_call, ChoiceDeltaToolCallFunction)
-                else function_call.function.arguments
-            )
+        executed_call_ids = []  # Keep track of executed calls for final results message
+        for tool_call in self.pending_function_calls:
+            call_id = tool_call.get("id", f"unknown_call_{uuid_pkg.uuid4()}")
+            executed_call_ids.append(call_id)
+
+            if tool_call.get("type") != "function" or not tool_call.get("function"):
+                logger.warning(f"Skipping non-function tool call: {tool_call}")
+                continue
+
+            function_name = tool_call["function"].get("name")
 
             try:
-                parsed_arguments = json.loads(function_arguments)
+                parsed_arguments = json.loads(tool_call["function"]["arguments"])
             except json.JSONDecodeError as e:
-                error_message = f"Error parsing arguments for {function_name}: {e}, {function_arguments}"
+                error_message = f"Error parsing arguments for {function_name}: {e}, {tool_call['function']['arguments']}"
                 logger.error(error_message)
                 self.function_results.add_error(error_message)
                 raise  # Re-raise to make the error visible
@@ -815,28 +954,197 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                     await method(**parsed_arguments)
                 except Exception as e:
                     error_info = traceback.extract_tb(e.__traceback__)[-1]
-                    error_message = f"Error in function '{function_name}' ({error_info.filename}, line {error_info.lineno}): {str(e)}"
-                    logger.error(error_message, level="error")
-                    self.function_results.add_error(error_message)
-
-                    # Create a more detailed error report
-                    detailed_error = (
-                        f"\nFunction Call Error Details:\n"
-                        f"Function: {function_name}\n"
-                        f"Arguments: {parsed_arguments}\n"
-                        f"Error: {str(e)}\n"
-                        f"Traceback:\n{traceback.format_exc()}"
+                    error_message = (
+                        f"Error in function '{function_name}' (ID: {call_id}): {str(e)}"
                     )
-                    logger.error(detailed_error)
-
-                    # Re-raise with more context
-                    raise RuntimeError(
-                        f"Function execution failed: {detailed_error}"
-                    ) from e
+                    logger.exception(
+                        f"Function execution failed: {function_name} (ID: {call_id})",
+                        exc_info=True,
+                    )
+                    self.function_results.add_error(
+                        error_message
+                    )  # Add simplified error for context
+                    # Send detailed error via handler
+                    # --- Combine into a single f-string ---
+                    detailed_error = f"Function Call Error: {function_name} (ID: {call_id})\nArguments: {json.dumps(parsed_arguments, indent=2)}\nError: {str(e)}\nTraceback:\n{traceback.format_exc()}"
+                    # -------------------------------------
+                    error_payload = ErrorPayload(
+                        interaction_id=self.interaction_id,
+                        message=detailed_error,
+                        code="FUNCTION_EXECUTION_ERROR",
+                        context={"call_id": call_id},
+                    )
+                    try:
+                        await self.message_handler.send_error(error_payload)
+                    except Exception as handler_err:
+                        logger.error(
+                            f"Failed to send function execution error via handler: {handler_err}"
+                        )
+                    # Continue loop even if one function fails
             else:
                 error_message = f"Tool {function_name} not found"
                 self.function_results.add_error(error_message)
                 raise ValueError(error_message)
+
+        final_status_payload = RobotStatusUpdatePayload(
+            interaction_id=self.interaction_id,
+            status=f"**FUNCTIONS CALLED!** RESULTS: {self.function_results.__str__()}",
+        )
+        await self.message_handler.update_status(final_status_payload)
+        self.function_results = MarkdownFunctionResults()  # Reset for next round
+
+    async def _handle_streaming_response(self) -> None:
+        """Process a streaming AI response using new handler methods."""
+        try:
+            await self._stream_response_and_gather_functions()
+            if self.pending_function_calls:
+                await self._execute_function_calls()
+                # Add function results to context *after* execution
+                await (
+                    self._add_function_results_to_context()
+                )  # Add results for next AI turn
+        except Exception as e:
+            # Error handling is now primarily within _stream_response_and_gather_functions
+            # and _execute_function_calls. This block is a final catch-all.
+            logger.exception(
+                f"Unhandled exception during _handle_streaming_response for run {self.interaction_id}: {e}"
+            )
+            if self.message_handler:
+                try:
+                    error_payload = ErrorPayload(
+                        interaction_id=self.interaction_id,
+                        message=f"Unexpected error handling stream: {e}",
+                        code="STREAM_HANDLING_ERROR",
+                        context={"traceback": format_exc()},
+                    )
+                    await self.message_handler.send_error(error_payload)
+                except Exception as handler_err:
+                    logger.error(
+                        f"Failed to send final stream handling error via handler: {handler_err}"
+                    )
+            # Depending on design, might want to ensure stream is marked ended
+
+    async def _stream_response_and_gather_functions(self) -> None:
+        """Process stream, accumulate message/functions, use new handler methods."""
+        self._accumulated_message = ""
+        self._current_function = None
+        self.pending_function_calls = []
+        stream_started = False
+        internal_message_to_add: Optional[AIMessage] = (
+            None  # Store message to add to history at the end
+        )
+
+        try:
+            # 1. Send stream_start
+            start_payload = StreamStartPayload(
+                interaction_id=self.interaction_id,
+                robot_id=self.robot_id,
+                robot_name=self.robot_name,
+                chat_id=self.chat_id or UUID("00000000-0000-0000-0000-000000000000"),
+            )
+            await self.message_handler.stream_start(start_payload)
+            stream_started = True
+            logger.debug(f"Stream started for run {self.interaction_id}")
+
+            # 2. Process chunks
+            if not isinstance(self.output_data, openai.AsyncStream):
+                logger.error(
+                    f"Stream processing error: output_data is not an AsyncGenerator (type: {type(self.output_data)}) for run {self.interaction_id}"
+                )
+                raise TypeError("Cannot process stream, invalid output data.")
+
+            async for chunk in self.output_data:
+                chunk: ChatCompletionChunk
+                await self._process_chunk(chunk)  # Pass only chunk
+                if chunk.choices and chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
+                    logger.debug(
+                        f"Stream finish reason for run {self.interaction_id}: {finish_reason}"
+                    )
+                    if finish_reason == "tool_calls":
+                        await self._finalize_current_function()
+                    break  # Exit loop on any finish reason
+
+            # Always finalize any pending function call after loop
+            await self._finalize_current_function()
+            logger.debug(
+                f"Finished processing stream chunks for run {self.interaction_id}"
+            )
+
+            # 3. Prepare internal message representation and send final message
+            if self._accumulated_message or self.pending_function_calls:
+                internal_message_to_add = AIMessage(
+                    role="assistant",
+                    content=self._accumulated_message or None,
+                    name=self.robot_name,
+                    robot_id=self.robot_id,
+                    interaction_id=self.interaction_id,
+                    chat_id=self.chat_id,
+                )
+                # Send final message payload first
+                final_message_payload = RobaiChatMessagePayload(
+                    interaction_id=self.interaction_id,
+                    chat_id=self.chat_id,
+                    robot_id=self.robot_id,
+                    robot_name=self.robot_name,
+                    content=self._accumulated_message,
+                    role="assistant",
+                )
+                await self.message_handler.send_full_message(final_message_payload)
+
+                # Then send stream_end
+                end_payload = StreamEndPayload(
+                    interaction_id=self.interaction_id,
+                    final_content=self._accumulated_message,
+                )
+                await self.message_handler.stream_end(end_payload)
+                logger.debug(f"Stream ended successfully for run {self.interaction_id}")
+
+                # Add to history after successful sends
+                self.add_message(internal_message_to_add)
+                self.output_data = internal_message_to_add
+                logger.debug(
+                    f"Added final stream message to internal history for run {self.interaction_id}"
+                )
+            else:
+                # Even with no content, send stream end to close the stream
+                end_payload = StreamEndPayload(
+                    interaction_id=self.interaction_id,
+                    final_content="",
+                )
+                await self.message_handler.stream_end(end_payload)
+                logger.debug(f"Stream ended (no content) for run {self.interaction_id}")
+
+        except Exception as e:
+            logger.exception(f"Error in _stream_response_and_gather_functions: {e}")
+            error_payload = ErrorPayload(
+                interaction_id=self.interaction_id,
+                code="STREAM_PROCESSING_ERROR",
+                message=f"Error processing stream: {str(e)}",
+                context={"robot_id": self.robot_id},
+            )
+            await self.message_handler.send_error(error_payload)
+            raise
+
+    async def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
+        """Process individual chunk, send via handler, accumulate message/functions."""
+        if not chunk.choices:
+            return
+        delta = chunk.choices[0].delta
+
+        # Handle content chunks
+        if delta.content:
+            self._accumulated_message += delta.content
+            chunk_payload = StreamChunkPayload(
+                interaction_id=self.interaction_id, content=delta.content
+            )
+            await self.message_handler.stream_chunk(chunk_payload)
+
+        # Handle tool call chunks
+        if delta.tool_calls:
+            tool_call_delta = delta.tool_calls[0]
+            if tool_call_delta.function:
+                await self._handle_tool_call_chunk(tool_call_delta.function)
 
     def set_system_prompt(self, prompt: SystemMessage) -> None:
         """Set the system prompt, replacing any existing ones."""
@@ -857,6 +1165,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                     role="assistant",
                     robot="function_bot",
                     content=f"**FUNCTIONS CALLED!** RESULTS: {self.function_results.__str__()}",
+                    interaction_id=self.interaction_id,
                 )
             )
             self.function_results = MarkdownFunctionResults()  # Reset for next round
@@ -1038,12 +1347,21 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             except Exception as e:
                 logger.warning(f"Error closing websocket during cleanup: {e}")
 
-
-def configure_logger(log_level: str = "WARNING") -> None:
-    """Configure logging levels for various components"""
-    # Set overall logging level
-    logger.remove()
-    logger.add(sys.stderr, level=log_level)
-
-    # Specifically set httpx to WARNING or higher to suppress HTTP request logs
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    async def setup_interaction(
+        self, interaction_id: str, chat_id: Optional[UUID] = None
+    ):
+        """Sets up the context for a specific interaction run."""
+        if not interaction_id:
+            logger.warning("Robot interaction started without an interaction_id!")
+            self.interaction_id = str(uuid_pkg.uuid4())  # Generate fallback
+        else:
+            self.interaction_id = interaction_id
+        self.chat_id = chat_id
+        logger.debug(
+            f"Robot {self.robot_id} interaction setup: InteractionID={self.interaction_id}, ChatID={self.chat_id}"
+        )
+        # Reset state variables for the new interaction?
+        self.finished = False
+        self.skip_call = False
+        # Reset prompt manager? Depends on desired behavior (persistent vs. per-interaction context)
+        # self.prompt_manager.clear_messages() # Uncomment if context should reset
