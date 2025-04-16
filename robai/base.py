@@ -1077,16 +1077,6 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                     interaction_id=self.interaction_id,
                     chat_id=self.chat_id,
                 )
-                # Send final message payload first
-                final_message_payload = RobaiChatMessagePayload(
-                    interaction_id=self.interaction_id,
-                    chat_id=self.chat_id,
-                    robot_id=self.robot_id,
-                    robot_name=self.robot_name,
-                    content=self._accumulated_message,
-                    role="assistant",
-                )
-                await self.message_handler.send_full_message(final_message_payload)
 
                 # Then send stream_end
                 end_payload = StreamEndPayload(
