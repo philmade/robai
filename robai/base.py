@@ -13,7 +13,8 @@ from typing import (
     Optional,
     Literal,
 )
-from uuid import UUID
+from uuid import UUID # Ensure UUID is imported
+import uuid as uuid_pkg # Alias for generating new UUIDs if needed
 from openai import AsyncOpenAI
 import openai
 from openai.types.chat.chat_completion import ChatCompletion
@@ -38,7 +39,7 @@ from robai.utility import configure_logger, format_exc
 
 from robai.protocols import (
     MessageHandler,
-    WebSocketMessageHandler,
+    ConsoleMessageHandler,
     ConsoleMessageHandler,
 )
 from openai.types.chat.chat_completion_chunk import (
@@ -301,6 +302,77 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         self.action_counts = {}  # Track frequency of actions
         self.error_count = 0  # Track recent errors
 
+    # --- Payload Creation Helper Methods ---
+
+    def _get_current_chat_id(self) -> UUID:
+        """Returns the current chat_id or a fallback UUID."""
+        return self.chat_id or uuid_pkg.UUID("00000000-0000-0000-0000-000000000000")
+
+    def _create_status_payload(self, status: str, is_complete: bool = False) -> RobotStatusUpdatePayload:
+        """Creates a RobotStatusUpdatePayload with current context."""
+        return RobotStatusUpdatePayload(
+            interaction_id=self.interaction_id,
+            robot_id=self.robot_id,
+            robot_name=self.robot_name,
+            chat_id=self._get_current_chat_id(),
+            status=status,
+            is_complete=is_complete,
+        )
+
+    def _create_error_payload(self, message: str, code: Optional[str] = None, context: Optional[dict] = None) -> ErrorPayload:
+        """Creates an ErrorPayload with current context."""
+        return ErrorPayload(
+            interaction_id=self.interaction_id,
+            robot_id=self.robot_id, # Add robot_id for context
+            chat_id=self._get_current_chat_id(), # Add chat_id for context
+            message=message,
+            code=code,
+            context=context,
+        )
+
+    def _create_stream_start_payload(self) -> StreamStartPayload:
+        """Creates a StreamStartPayload with current context."""
+        return StreamStartPayload(
+            interaction_id=self.interaction_id,
+            robot_id=self.robot_id,
+            robot_name=self.robot_name,
+            chat_id=self._get_current_chat_id(),
+        )
+
+    def _create_stream_chunk_payload(self, content: str, message_id: Optional[str] = None) -> StreamChunkPayload:
+        """Creates a StreamChunkPayload."""
+        # message_id might be needed if consolidating chunks client-side based on a final message ID
+        return StreamChunkPayload(
+            interaction_id=self.interaction_id,
+            content=content,
+            message_id=message_id, # Pass along if provided
+        )
+
+    def _create_stream_end_payload(self, final_content: Optional[str] = None) -> StreamEndPayload:
+        """Creates a StreamEndPayload."""
+        return StreamEndPayload(
+            interaction_id=self.interaction_id,
+            final_content=final_content,
+        )
+
+    def _create_full_message_payload(self, content: str, role: str = "assistant", metadata: Optional[dict] = None) -> RobaiChatMessagePayload:
+        """Creates a RobaiChatMessagePayload for sending a complete message."""
+        return RobaiChatMessagePayload(
+            message_id=str(uuid_pkg.uuid4()), # Generate new ID for the message
+            interaction_id=self.interaction_id,
+            chat_id=self._get_current_chat_id(),
+            robot_id=self.robot_id if role == "assistant" else None,
+            robot_name=self.robot_name if role == "assistant" else None,
+            user_id=None, # Assuming assistant role primarily
+            user_name=None, # Assuming assistant role primarily
+            content=content,
+            role=role,
+            timestamp=datetime.now(timezone.utc),
+            metadata=metadata,
+        )
+
+    # --- End Payload Helpers ---
+
     def _init_system_prompt(self) -> None:
         """Initialize the base system prompt. Override in child classes."""
         self.system_prompt = SystemMessage(content="I am a base AI robot.")
@@ -333,7 +405,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         self.message_handler.clear_current_robot()
         # Only close the message handler if we own it
         if self.owns_message_handler and isinstance(
-            self.message_handler, WebSocketMessageHandler
+            self.message_handler, ConsoleMessageHandler
         ):
             try:
                 await self.message_handler.websocket.close()
@@ -413,31 +485,22 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             variables: Optional dict of variables to display in state view
         """
         if self.message_handler:
-            # Construct a status payload
-            status_payload = RobotStatusUpdatePayload(
-                interaction_id=self.interaction_id,
-                robot_id=self.robot_id,
-                robot_name=self.robot_name,
-                chat_id=self.chat_id
-                or UUID(
-                    "00000000-0000-0000-0000-000000000000"
-                ),  # Use real chat_id or dummy
-                status=f"[{level.upper()}] {message}",
-                # Add variables to status or create separate log event?
-                # For now, include in status message if simple
-                is_complete=(
-                    level == "output"
-                ),  # Mark as complete if it's the final output log?
-            )
+            # Use the helper method to create the payload
+            status_text = f"[{level.upper()}] {message}"
             if variables:
                 try:
-                    status_payload.status += f" | Vars: {json.dumps(variables)}"
+                    status_text += f" | Vars: {json.dumps(variables)}"
                 except TypeError:
-                    status_payload.status += " | Vars: [non-serializable]"
+                    status_text += " | Vars: [non-serializable]"
+
+            status_payload = self._create_status_payload(
+                status=status_text,
+                is_complete=(level == "output") # Mark as complete if it's the final output log?
+            )
 
             # Use try-except block for handler call
             try:
-                await self.message_handler.update_status(status_payload)
+                await self.message_handler.update_status(payload=status_payload) # Pass the created payload
             except Exception as e:
                 logger.error(f"Failed to send log/status via message handler: {e}")
         else:
@@ -792,12 +855,12 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             )
             if self.message_handler:
                 try:
-                    error_payload = ErrorPayload(
-                        interaction_id=self.interaction_id,
+                    # Use helper to create error payload
+                    error_payload = self._create_error_payload(
                         message="Internal error: Invalid non-streaming output format generated by AI.",
-                        code="INTERNAL_OUTPUT_ERROR",
+                        code="INTERNAL_OUTPUT_ERROR"
                     )
-                    await self.message_handler.send_error(error_payload)
+                    await self.message_handler.send_error(payload=error_payload) # Pass created payload
                 except Exception as handler_err:
                     logger.error(
                         f"Failed to send output format error via message handler: {handler_err}"
@@ -823,22 +886,15 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             # Update the message object itself if needed for history
             final_ai_message.content = content_to_send
 
-        # 3. Send the full message via the handler
-        # Create RobaiChatMessagePayload from the final AIMessage
-        payload = RobaiChatMessagePayload(
-            message_id=str(uuid_pkg.uuid4()),  # Generate ID
-            interaction_id=self.interaction_id,
-            chat_id=self.chat_id or UUID("00000000-0000-0000-0000-000000000000"),
-            robot_id=self.robot_id,
-            robot_name=self.robot_name,
+        # 3. Send the full message via the handler using helper
+        payload = self._create_full_message_payload(
             content=content_to_send,
             role="assistant",
-            timestamp=datetime.now(timezone.utc),
-            metadata=final_ai_message.metadata,  # Include metadata if any
+            metadata=final_ai_message.metadata # Pass metadata if any
         )
         try:
             if self.message_handler:
-                await self.message_handler.send_full_message(payload)
+                await self.message_handler.send_full_message(payload=payload) # Pass created payload
                 # Add the final AIMessage to internal history
                 self.add_message(final_ai_message)
                 self.add_action_to_history("✅ Full Message Sent")
@@ -856,13 +912,12 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             # Error already logged, output_data remains the AIMessage but sending failed
             if self.message_handler:
                 try:
-                    # Send a specific error about the sending failure
-                    error_payload = ErrorPayload(
-                        interaction_id=self.interaction_id,
+                    # Use helper to create error payload
+                    error_payload = self._create_error_payload(
                         message=f"Failed to send generated message via handler: {e}",
-                        code="HANDLER_SEND_ERROR",
+                        code="HANDLER_SEND_ERROR"
                     )
-                    await self.message_handler.send_error(error_payload)
+                    await self.message_handler.send_error(payload=error_payload) # Pass created payload
                 except Exception:
                     pass  # Avoid error loops
 
@@ -895,12 +950,9 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         if not self._current_function:
             self._current_function = {"name": "", "arguments": ""}
             if function_delta.name:
-                await self.message_handler.update_status(
-                    payload=RobotStatusUpdatePayload(
-                        interaction_id=self.interaction_id,
-                        status=f"Calling {function_delta.name}",
-                    )
-                )
+                # Use helper to create status payload
+                status_payload = self._create_status_payload(status=f"Calling {function_delta.name}")
+                await self.message_handler.update_status(payload=status_payload)
 
         # Accumulate function name
         if (
@@ -930,17 +982,11 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
 
         executed_call_ids = []  # Keep track of executed calls for final results message
         for tool_call in self.pending_function_calls:
-            call_id = tool_call.get("id", f"unknown_call_{uuid_pkg.uuid4()}")
-            executed_call_ids.append(call_id)
-
-            if tool_call.get("type") != "function" or not tool_call.get("function"):
-                logger.warning(f"Skipping non-function tool call: {tool_call}")
-                continue
-
-            function_name = tool_call["function"].get("name")
+            executed_call_ids.append(tool_call.name)
+            function_name = tool_call.name
 
             try:
-                parsed_arguments = json.loads(tool_call["function"]["arguments"])
+                parsed_arguments = json.loads(tool_call.arguments)
             except json.JSONDecodeError as e:
                 error_message = f"Error parsing arguments for {function_name}: {e}, {tool_call['function']['arguments']}"
                 logger.error(error_message)
@@ -967,14 +1013,14 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                     # --- Combine into a single f-string ---
                     detailed_error = f"Function Call Error: {function_name} (ID: {call_id})\nArguments: {json.dumps(parsed_arguments, indent=2)}\nError: {str(e)}\nTraceback:\n{traceback.format_exc()}"
                     # -------------------------------------
-                    error_payload = ErrorPayload(
-                        interaction_id=self.interaction_id,
+                    # Use helper to create error payload
+                    error_payload = self._create_error_payload(
                         message=detailed_error,
                         code="FUNCTION_EXECUTION_ERROR",
-                        context={"call_id": call_id},
+                        context={"call_id": call_id}
                     )
                     try:
-                        await self.message_handler.send_error(error_payload)
+                        await self.message_handler.send_error(payload=error_payload) # Pass created payload
                     except Exception as handler_err:
                         logger.error(
                             f"Failed to send function execution error via handler: {handler_err}"
@@ -985,11 +1031,11 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                 self.function_results.add_error(error_message)
                 raise ValueError(error_message)
 
-        final_status_payload = RobotStatusUpdatePayload(
-            interaction_id=self.interaction_id,
-            status=f"**FUNCTIONS CALLED!** RESULTS: {self.function_results.__str__()}",
+        # Use helper to create status payload
+        final_status_payload = self._create_status_payload(
+            status=f"**FUNCTIONS CALLED!** RESULTS: {self.function_results.__str__()}"
         )
-        await self.message_handler.update_status(final_status_payload)
+        await self.message_handler.update_status(payload=final_status_payload) # Pass created payload
         self.function_results = MarkdownFunctionResults()  # Reset for next round
 
     async def _handle_streaming_response(self) -> None:
@@ -1010,13 +1056,13 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             )
             if self.message_handler:
                 try:
-                    error_payload = ErrorPayload(
-                        interaction_id=self.interaction_id,
+                    # Use helper to create error payload
+                    error_payload = self._create_error_payload(
                         message=f"Unexpected error handling stream: {e}",
                         code="STREAM_HANDLING_ERROR",
-                        context={"traceback": format_exc()},
+                        context={"traceback": format_exc()}
                     )
-                    await self.message_handler.send_error(error_payload)
+                    await self.message_handler.send_error(payload=error_payload) # Pass created payload
                 except Exception as handler_err:
                     logger.error(
                         f"Failed to send final stream handling error via handler: {handler_err}"
@@ -1027,20 +1073,15 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         """Process stream, accumulate message/functions, use new handler methods."""
         self._accumulated_message = ""
         self._current_function = None
-        self.pending_function_calls = []
+        self.pending_function_calls: List[ChoiceDeltaToolCallFunction] = []
         internal_message_to_add: Optional[AIMessage] = (
             None  # Store message to add to history at the end
         )
 
         try:
-            # 1. Send stream_start
-            start_payload = StreamStartPayload(
-                interaction_id=self.interaction_id,
-                robot_id=self.robot_id,
-                robot_name=self.robot_name,
-                chat_id=self.chat_id or UUID("00000000-0000-0000-0000-000000000000"),
-            )
-            await self.message_handler.stream_start(start_payload)
+            # 1. Send stream_start using helper
+            start_payload = self._create_stream_start_payload()
+            await self.message_handler.stream_start(payload=start_payload) # Pass created payload
 
             # 2. Process chunks
             if not isinstance(self.output_data, openai.AsyncStream):
@@ -1071,19 +1112,23 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             if self._accumulated_message or self.pending_function_calls:
                 internal_message_to_add = AIMessage(
                     role="assistant",
-                    content=self._accumulated_message or None,
+                    content=self._accumulated_message or "",
                     name=self.robot_name,
                     robot_id=self.robot_id,
                     interaction_id=self.interaction_id,
                     chat_id=self.chat_id,
                 )
-
-                # Then send stream_end
-                end_payload = StreamEndPayload(
-                    interaction_id=self.interaction_id,
-                    final_content=self._accumulated_message,
+                # Send final message payload using helper
+                final_message_payload = self._create_full_message_payload(
+                    content=self._accumulated_message,
+                    role="assistant"
+                    # metadata could be added here if needed
                 )
-                await self.message_handler.stream_end(end_payload)
+                await self.message_handler.send_full_message(payload=final_message_payload)
+
+                # Then send stream_end using helper
+                end_payload = self._create_stream_end_payload(final_content=self._accumulated_message)
+                await self.message_handler.stream_end(payload=end_payload)
                 logger.debug(f"Stream ended successfully for run {self.interaction_id}")
 
                 # Add to history after successful sends
@@ -1093,23 +1138,20 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                     f"Added final stream message to internal history for run {self.interaction_id}"
                 )
             else:
-                # Even with no content, send stream end to close the stream
-                end_payload = StreamEndPayload(
-                    interaction_id=self.interaction_id,
-                    final_content="",
-                )
-                await self.message_handler.stream_end(end_payload)
+                # Even with no content, send stream end using helper
+                end_payload = self._create_stream_end_payload(final_content="")
+                await self.message_handler.stream_end(payload=end_payload) # Pass created payload
                 logger.debug(f"Stream ended (no content) for run {self.interaction_id}")
 
         except Exception as e:
             logger.exception(f"Error in _stream_response_and_gather_functions: {e}")
-            error_payload = ErrorPayload(
-                interaction_id=self.interaction_id,
-                code="STREAM_PROCESSING_ERROR",
+            # Use helper to create error payload
+            error_payload = self._create_error_payload(
                 message=f"Error processing stream: {str(e)}",
-                context={"robot_id": self.robot_id},
+                code="STREAM_PROCESSING_ERROR",
+                context={"robot_id": self.robot_id} # Keep specific context if needed
             )
-            await self.message_handler.send_error(error_payload)
+            await self.message_handler.send_error(payload=error_payload) # Pass created payload
             raise
 
     async def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
@@ -1121,10 +1163,10 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         # Handle content chunks
         if delta.content:
             self._accumulated_message += delta.content
-            chunk_payload = StreamChunkPayload(
-                interaction_id=self.interaction_id, content=delta.content
-            )
-            await self.message_handler.stream_chunk(chunk_payload)
+            # Use helper to create chunk payload
+            # Note: message_id is not currently used by the helper but passed for potential future use
+            chunk_payload = self._create_stream_chunk_payload(content=delta.content)
+            await self.message_handler.stream_chunk(payload=chunk_payload) # Pass created payload
 
         # Handle tool call chunks
         if delta.tool_calls:
@@ -1326,7 +1368,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
     async def cleanup(self) -> None:
         """Cleanup resources."""
         if self.owns_message_handler and isinstance(
-            self.message_handler, WebSocketMessageHandler
+            self.message_handler, ConsoleMessageHandler
         ):
             try:
                 await self.message_handler.websocket.close()
