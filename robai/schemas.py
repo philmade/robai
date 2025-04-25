@@ -1,9 +1,11 @@
+from deprecated import deprecated
 from pydantic import BaseModel, Field
 import tiktoken
 from typing import List, Union, Dict, Optional, Any, Literal
 import uuid
 from uuid import UUID  # Import UUID directly for cleaner union syntax
 from datetime import datetime, timezone
+
 
 tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
@@ -22,7 +24,7 @@ class TokenBaseModel(BaseModel):
         # For now, just focusing on content if available
         return len(tokenizer.encode(content_str))
 
-
+@deprecated
 class ChatMessage(TokenBaseModel):
     role: str = "user"
     name: Optional[str] = None  # Make optional as per app schema
@@ -34,7 +36,7 @@ class ChatMessage(TokenBaseModel):
     client_message_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
-
+@deprecated
 class AIMessage(TokenBaseModel):
     role: str = "assistant"
     name: Optional[str] = None  # Make optional as per app schema

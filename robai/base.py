@@ -22,8 +22,7 @@ import os
 from abc import ABC, abstractmethod
 from loguru import logger
 from robai.schemas import (
-    ChatMessage,
-    AIMessage,
+    RobaiChatMessagePayload,
     SystemMessage,
     MarkdownFunctionResults,
     RobotStatusUpdatePayload,
@@ -49,6 +48,7 @@ from openai.types.chat.chat_completion_chunk import (
     ChoiceDelta,
     Choice,
 )
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall
 import json
 import traceback
 from rich.console import Console
@@ -73,7 +73,7 @@ class PromptManager:
     max_messages: int = 50  # Maximum number of messages to keep
     max_tokens: int = 4000  # Maximum total tokens allowed
     system_messages: List[SystemMessage] = None  # System messages are preserved
-    messages: List[Union[ChatMessage, AIMessage]] = None  # Regular messages get trimmed
+    messages: List[RobaiChatMessagePayload] = None  # Regular messages get trimmed
     tokenizer: Any = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
     def __post_init__(self):
@@ -84,7 +84,7 @@ class PromptManager:
         """Add a system message that will be preserved."""
         self.system_messages = [message]
 
-    def add_message(self, message: Union[ChatMessage, AIMessage]) -> None:
+    def add_message(self, message: RobaiChatMessagePayload) -> None:
         """Add a message to the window, automatically trimming if limits are exceeded."""
         self.messages.append(message)
         self._trim_if_needed()
@@ -106,7 +106,7 @@ class PromptManager:
         return len(self.tokenizer.encode(all_text))
 
     @property
-    def all_messages(self) -> List[Union[SystemMessage, ChatMessage, AIMessage]]:
+    def all_messages(self) -> List[Union[SystemMessage, RobaiChatMessagePayload]]:
         """Get all messages in order (system messages first)."""
         return self.system_messages + self.messages
 
@@ -141,7 +141,7 @@ class BaseAI:
 
     async def generate_response(
         self,
-        prompt_messages: List[ChatMessage],
+        prompt_messages: List[RobaiChatMessagePayload],
         functions_for_ai: Dict[str, Callable] = None,
         force_function: Optional[str] = None,
         *args,
@@ -470,52 +470,6 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         """
         pass
 
-    async def log(
-        self,
-        message: str,
-        level: Literal["input", "thinking", "output", "state", "error"] = "state",
-        variables: Optional[dict] = None,
-    ) -> None:
-        """
-        Unified logging function that sends internal state to the websocket
-
-        Args:
-            message: The message to log
-            level: The type of log message
-            variables: Optional dict of variables to display in state view
-        """
-        if self.message_handler:
-            # Use the helper method to create the payload
-            status_text = f"[{level.upper()}] {message}"
-            if variables:
-                try:
-                    status_text += f" | Vars: {json.dumps(variables)}"
-                except TypeError:
-                    status_text += " | Vars: [non-serializable]"
-
-            status_payload = self._create_status_payload(
-                status=status_text,
-                is_complete=(level == "output") # Mark as complete if it's the final output log?
-            )
-
-            # Use try-except block for handler call
-            try:
-                await self.message_handler.update_status(payload=status_payload) # Pass the created payload
-            except Exception as e:
-                logger.error(f"Failed to send log/status via message handler: {e}")
-        else:
-            log_level_map = {
-                "input": "INFO",
-                "thinking": "DEBUG",
-                "output": "INFO",
-                "state": "DEBUG",
-                "error": "ERROR",
-            }
-            logger.log(
-                log_level_map.get(level, "INFO"),
-                f"{self.robot_name} ({self.robot_id}): {message}",
-            )  # Include ID in log
-
     async def _interactive_generate(self, *args, **kwargs):
         """Interactive version of generate_response for testing - simulates AI responses"""
         menu = Table(show_header=True, header_style="bold magenta")
@@ -741,7 +695,6 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                 await self.generate_ai_response()  # Uses new handler methods indirectly
 
             # Output logging now handled by process or specific handler calls
-            # await self.log(...) # Removed direct log call here
 
             # Process uses updated handler methods
             await self.process()
@@ -760,7 +713,8 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
 
         except (WebSocketDisconnect, ConnectionClosedOK, ConnectionClosedError) as e:
             # Log error using self.log which uses handler.update_status or handler.send_error
-            await self.log(f"WebSocket disconnected: {e}", level="error")
+            error_payload = self._create_error_payload(message = f"WebSocket disconnected: {e}" )
+            await self.message_handler.send_error(error_payload)
             raise
         except Exception as e:
             # Log error and send explicit error via handler
@@ -810,12 +764,12 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         else:
             # response_data is Tuple[str, Optional[List[Any]]]
             output_content, function_calls = response_data
-            # Store AIMessage internally, handler methods will use it later
-            self.output_data = AIMessage(
+            # Store RobaiChatMessagePayload internally, handler methods will use it later
+            self.output_data = RobaiChatMessagePayload(
                 role="assistant",
-                content=output_content,
+                content=output_content or '',
                 name=self.robot_name,  # Use robot's name
-                robot_id=self.robot_id,
+                robot_id=self.robot_id,     
                 interaction_id=self.interaction_id,
                 chat_id=self.chat_id,
             )
@@ -826,14 +780,14 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
 
     # UTILITY FUNCTIONS FOR CHILD CLASSES
     async def _handle_non_streaming_response(self) -> None:
-        """Process a non-streaming AI response, ensure self.output_data is AIMessage, and use handler."""
-        final_ai_message: Optional[AIMessage] = None
+        """Process a non-streaming AI response, ensure self.output_data is RobaiChatMessagePayload, and use handler."""
+        final_ai_message: Optional[RobaiChatMessagePayload] = None
 
         # 1. Check the initial output_data type
         if isinstance(self.output_data, str):
-            # If it's a string, wrap it in an AIMessage
-            logger.debug("Wrapping string output_data in AIMessage for non-streaming.")
-            final_ai_message = AIMessage(
+            # If it's a string, wrap it in an RobaiChatMessagePayload
+            logger.debug("Wrapping string output_data in RobaiChatMessagePayload for non-streaming.")
+            final_ai_message = RobaiChatMessagePayload(
                 role="assistant",
                 content=self.output_data,
                 name=self.robot_name,
@@ -841,15 +795,15 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                 interaction_id=self.interaction_id,
                 chat_id=self.chat_id,
             )
-            # Update self.output_data to the AIMessage object
+            # Update self.output_data to the RobaiChatMessagePayload object
             self.output_data = final_ai_message
 
-        elif isinstance(self.output_data, AIMessage):
-            # If it's already an AIMessage, use it directly
-            logger.debug("Using existing AIMessage output_data for non-streaming.")
+        elif isinstance(self.output_data, RobaiChatMessagePayload):
+            # If it's already an RobaiChatMessagePayload, use it directly
+            logger.debug("Using existing RobaiChatMessagePayload output_data for non-streaming.")
             final_ai_message = self.output_data
         else:
-            # If it's neither string nor AIMessage, log error and try to send error payload
+            # If it's neither string nor RobaiChatMessagePayload, log error and try to send error payload
             logger.error(
                 f"_handle_non_streaming_response called with unexpected output_data type: {type(self.output_data)}. Cannot process."
             )
@@ -869,10 +823,10 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
             self.output_data = None
             return  # Exit if format is invalid
 
-        # 2. Ensure we have a valid AIMessage and content
+        # 2. Ensure we have a valid RobaiChatMessagePayload and content
         if not final_ai_message:
             logger.error(
-                "Failed to create or retrieve AIMessage in _handle_non_streaming_response."
+                "Failed to create or retrieve RobaiChatMessagePayload in _handle_non_streaming_response."
             )
             self.output_data = None  # Ensure output_data reflects failure
             return
@@ -895,7 +849,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         try:
             if self.message_handler:
                 await self.message_handler.send_full_message(payload=payload) # Pass created payload
-                # Add the final AIMessage to internal history
+                # Add the final RobaiChatMessagePayload to internal history
                 self.add_message(final_ai_message)
                 self.add_action_to_history("✅ Full Message Sent")
             else:
@@ -909,7 +863,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         except Exception as e:
             logger.exception(f"Error sending non-streaming message via handler: {e}")
             self.add_action_to_history("❌ Error Sending Message", details=str(e))
-            # Error already logged, output_data remains the AIMessage but sending failed
+            # Error already logged, output_data remains the RobaiChatMessagePayload but sending failed
             if self.message_handler:
                 try:
                     # Use helper to create error payload
@@ -982,11 +936,17 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
 
         executed_call_ids = []  # Keep track of executed calls for final results message
         for tool_call in self.pending_function_calls:
-            executed_call_ids.append(tool_call.name)
-            function_name = tool_call.name
+            if isinstance(tool_call, ChoiceDeltaToolCallFunction):
+                executed_call_ids.append(tool_call.name)
+                function_name = tool_call.name
+                arguments = tool_call.arguments
+            elif isinstance(tool_call, ChatCompletionMessageToolCall):
+                executed_call_ids.append(tool_call.function.name)
+                function_name = tool_call.function.name
+                arguments = tool_call.function.arguments
 
             try:
-                parsed_arguments = json.loads(tool_call.arguments)
+                parsed_arguments = json.loads(arguments)
             except json.JSONDecodeError as e:
                 error_message = f"Error parsing arguments for {function_name}: {e}, {tool_call['function']['arguments']}"
                 logger.error(error_message)
@@ -1000,10 +960,10 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                     await method(**parsed_arguments)
                 except Exception as e:
                     error_message = (
-                        f"Error in function '{function_name}' (ID: {call_id}): {str(e)}"
+                        f"Error in function '{function_name}' {str(e)}"
                     )
                     logger.exception(
-                        f"Function execution failed: {function_name} (ID: {call_id})",
+                        f"Function execution failed: {function_name}",
                         exc_info=True,
                     )
                     self.function_results.add_error(
@@ -1011,13 +971,13 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
                     )  # Add simplified error for context
                     # Send detailed error via handler
                     # --- Combine into a single f-string ---
-                    detailed_error = f"Function Call Error: {function_name} (ID: {call_id})\nArguments: {json.dumps(parsed_arguments, indent=2)}\nError: {str(e)}\nTraceback:\n{traceback.format_exc()}"
+                    detailed_error = f"Function Call Error: {function_name}\nArguments: {json.dumps(parsed_arguments, indent=2)}\nError: {str(e)}\nTraceback:\n{traceback.format_exc()}"
                     # -------------------------------------
                     # Use helper to create error payload
                     error_payload = self._create_error_payload(
-                        message=detailed_error,
+                        message=detailed_error, 
                         code="FUNCTION_EXECUTION_ERROR",
-                        context={"call_id": call_id}
+                        context={"function_name": function_name}
                     )
                     try:
                         await self.message_handler.send_error(payload=error_payload) # Pass created payload
@@ -1073,8 +1033,8 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         """Process stream, accumulate message/functions, use new handler methods."""
         self._accumulated_message = ""
         self._current_function = None
-        self.pending_function_calls: List[ChoiceDeltaToolCallFunction] = []
-        internal_message_to_add: Optional[AIMessage] = (
+        self.pending_function_calls: List[Union[ChatCompletionMessageToolCall, ChoiceDeltaToolCallFunction]] = []
+        internal_message_to_add: Optional[RobaiChatMessagePayload] = (
             None  # Store message to add to history at the end
         )
 
@@ -1110,7 +1070,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
 
             # 3. Prepare internal message representation and send final message
             if self._accumulated_message or self.pending_function_calls:
-                internal_message_to_add = AIMessage(
+                internal_message_to_add = RobaiChatMessagePayload(
                     role="assistant",
                     content=self._accumulated_message or "",
                     name=self.robot_name,
@@ -1180,7 +1140,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         self.prompt_manager.clear_all()
         self.prompt_manager.set_system_prompt(prompt)
 
-    def add_message(self, message: Union[ChatMessage, AIMessage]) -> None:
+    def add_message(self, message: Union[RobaiChatMessagePayload]) -> None:
         """Add a message to the chat window."""
         self.prompt_manager.add_message(message)
 
@@ -1189,7 +1149,7 @@ class BaseRobot(ABC, Generic[InputType, OutputType]):
         if str(self.function_results):
             # Add as a regular message instead of system message so it can be trimmed
             self.prompt_manager.add_message(
-                AIMessage(
+                RobaiChatMessagePayload(
                     role="assistant",
                     robot="function_bot",
                     content=f"**FUNCTIONS CALLED!** RESULTS: {self.function_results.__str__()}",

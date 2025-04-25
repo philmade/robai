@@ -1,5 +1,4 @@
-from typing import List, Optional, Any, Coroutine, Union, Dict
-from fastapi import WebSocket
+from typing import List, Any, Union, Dict
 from robai.schemas import (
     StreamStartPayload,
     StreamChunkPayload,
@@ -11,7 +10,6 @@ from robai.schemas import (
     AIMessage,
     SystemMessage,
 )
-import asyncio
 from rich.console import Console
 import shutil
 import json
@@ -20,11 +18,8 @@ from loguru import logger
 import time
 from rich.markdown import Markdown
 from rich.syntax import Syntax
-import re
 from rich.panel import Panel
 from uuid import UUID
-import uuid as uuid_pkg # Alias for generating new UUIDs if needed
-from pydantic import BaseModel
 
 
 def format_markdown(text: str) -> None:
